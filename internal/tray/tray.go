@@ -21,6 +21,7 @@ import (
 
 	"agent-notify/internal/engine"
 	"agent-notify/internal/event"
+	"agent-notify/internal/icon"
 	"agent-notify/internal/sink"
 )
 
@@ -75,7 +76,7 @@ func (t *Tray) Run(ctx context.Context, onTest func()) {
 }
 
 func (t *Tray) onReady(ctx context.Context, onTest func()) {
-	systray.SetIcon(IconBytes("idle", iconSize))
+	systray.SetIcon(icon.Bytes("idle", iconSize))
 	systray.SetTooltip("agent-notify — starting…")
 	t.render(onTest)
 	go t.refreshLoop(ctx, onTest)
@@ -114,7 +115,7 @@ func (t *Tray) render(onTest func()) {
 		return // nothing view-relevant changed; keep the menu untouched
 	}
 
-	systray.SetIcon(IconBytes(v.Severity(), iconSize))
+	systray.SetIcon(icon.Bytes(v.Severity(), iconSize))
 	systray.SetTooltip("agent-notify — " + v.Summary())
 
 	if structure := structuralKey(v); structure != t.lastStructure {

@@ -1,4 +1,7 @@
-package tray
+// Package icon renders the severity-colored disc used for the tray icon
+// and toast logo. It generates bytes directly (32bpp DIB ICO for
+// LoadImage, PNG elsewhere) with no image assets.
+package icon
 
 import (
 	"bytes"
@@ -10,13 +13,12 @@ import (
 	"runtime"
 )
 
-// rgb is an 8-bit color channel triple.
-type rgb struct{ R, G, B uint8 }
+// RGB is an 8-bit color channel triple.
+type RGB struct{ R, G, B uint8 }
 
-// severityColors maps the engine severity to tray icon colors:
-// blocked red, offline amber, waiting-for-you green, working blue,
-// idle gray.
-var severityColors = map[string]rgb{
+// severityColors maps the engine severity to brand colors: blocked red,
+// offline amber, waiting-for-you green, working blue, idle gray.
+var severityColors = map[string]RGB{
 	"blocked": {0xE5, 0x48, 0x4D},
 	"down":    {0xFF, 0xB0, 0x2E},
 	"waiting": {0x22, 0xC5, 0x5E},
@@ -24,13 +26,18 @@ var severityColors = map[string]rgb{
 	"idle":    {0x6B, 0x72, 0x80},
 }
 
-// IconBytes returns tray icon bytes for a severity: a 32bpp ICO on
-// Windows (LoadImage-compatible), a PNG elsewhere.
-func IconBytes(severity string, size int) []byte {
-	c, ok := severityColors[severity]
-	if !ok {
-		c = severityColors["idle"]
+// Color returns the color for a severity, defaulting to idle gray.
+func Color(severity string) RGB {
+	if c, ok := severityColors[severity]; ok {
+		return c
 	}
+	return severityColors["idle"]
+}
+
+// Bytes returns tray icon bytes for a severity: a 32bpp ICO on Windows
+// (LoadImage-compatible), a PNG elsewhere.
+func Bytes(severity string, size int) []byte {
+	c := Color(severity)
 	if runtime.GOOS == "windows" {
 		return ICO(c, size)
 	}
@@ -39,7 +46,7 @@ func IconBytes(severity string, size int) []byte {
 
 // ICO renders a filled, antialiased disc with a thin white halo as a
 // 32bpp DIB inside an ICO container — no PNG-in-ICO support needed.
-func ICO(c rgb, size int) []byte {
+func ICO(c RGB, size int) []byte {
 	dib := dibCircle(c, size)
 	// Fully transparent AND mask (alpha channel carries opacity), rows
 	// padded to 4-byte boundaries as the ICO format requires.
@@ -69,7 +76,7 @@ func ICO(c rgb, size int) []byte {
 
 // dibCircle renders the icon as a BITMAPINFOHEADER plus bottom-up BGRA
 // rows. Height is doubled per the ICO spec (XOR + AND masks).
-func dibCircle(c rgb, size int) []byte {
+func dibCircle(c RGB, size int) []byte {
 	pixels := make([]byte, 0, size*size*4)
 	for y := size - 1; y >= 0; y-- { // bottom-up
 		for x := 0; x < size; x++ {
@@ -93,7 +100,7 @@ func dibCircle(c rgb, size int) []byte {
 
 // circlePixel composes a colored disc over a slightly larger white halo,
 // both antialiased, over transparency — visible on light and dark trays.
-func circlePixel(c rgb, size, x, y int) (uint8, uint8, uint8, uint8) {
+func circlePixel(c RGB, size, x, y int) (uint8, uint8, uint8, uint8) {
 	fx := float64(x) + 0.5
 	fy := float64(y) + 0.5
 	center := float64(size) / 2
@@ -140,7 +147,7 @@ func clamp01(v float64) float64 {
 }
 
 // PNG renders the same disc for non-Windows trays.
-func PNG(c rgb, size int) []byte {
+func PNG(c RGB, size int) []byte {
 	img := image.NewNRGBA(image.Rect(0, 0, size, size))
 	for y := range size {
 		for x := range size {

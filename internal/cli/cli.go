@@ -50,6 +50,7 @@ Flags:
 
 // Run executes the CLI and returns the process exit code.
 func Run(argv []string, stdout, stderr io.Writer) int {
+	attachParentConsole() // windowsgui builds: reattach for CLI subcommands
 	var (
 		configPath string
 		verbose    bool
@@ -172,6 +173,25 @@ func kindSet(ks []event.Kind) map[event.Kind]bool {
 // buildSinks creates the configured sinks. withTray adds/keeps the tray
 // sink; headless commands pass false and tray sinks are skipped with a
 // note. Returns the sinks and notes to log.
+// fleetExtra composes the toast's third line: space + live fleet summary.
+func fleetExtra(eng *engine.Engine) func(event.Event) string {
+	return func(ev event.Event) string {
+		var parts []string
+		if ev.Project != "" {
+			parts = append(parts, ev.Project)
+		}
+		if ev.Host != "" || ev.Session != "" {
+			parts = append(parts, ev.Host+"/"+ev.Session)
+		}
+		line := strings.Join(parts, " · ")
+		summary := eng.View().Summary()
+		if line == "" {
+			return summary
+		}
+		return line + " — " + summary
+	}
+}
+
 func buildSinks(cfg config.Config, eng *engine.Engine, log *slog.Logger, withTray bool) ([]sink.Sink, error) {
 	r, err := render.New(cfg.Render.Title, cfg.Render.Body)
 	if err != nil {
@@ -199,6 +219,8 @@ func buildSinks(cfg config.Config, eng *engine.Engine, log *slog.Logger, withTra
 				if err != nil {
 					log.Warn("attention popups unavailable; tray will be icon-only", "error", err)
 					pop = nil
+				} else {
+					pop.SetExtra(fleetExtra(eng))
 				}
 			}
 			sinks = append(sinks, tray.New(eng, pop, log))
@@ -207,6 +229,7 @@ func buildSinks(cfg config.Config, eng *engine.Engine, log *slog.Logger, withTra
 			if err != nil {
 				return nil, err
 			}
+			pop.SetExtra(fleetExtra(eng))
 			sinks = append(sinks, pop)
 		case "bell":
 			sinks = append(sinks, sink.NewBell(os.Stderr))
@@ -232,6 +255,8 @@ func buildSinks(cfg config.Config, eng *engine.Engine, log *slog.Logger, withTra
 		if perr != nil {
 			log.Warn("attention popups unavailable; tray will be icon-only", "error", perr)
 			pop = nil
+		} else {
+			pop.SetExtra(fleetExtra(eng))
 		}
 		sinks = append(sinks, tray.New(eng, pop, log))
 	}

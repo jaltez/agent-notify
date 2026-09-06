@@ -1,4 +1,4 @@
-package tray
+package icon
 
 import (
 	"encoding/binary"
@@ -7,7 +7,7 @@ import (
 
 func TestICOStructure(t *testing.T) {
 	const size = 32
-	data := ICO(severityColors["blocked"], size)
+	data := ICO(Color("blocked"), size)
 	if len(data) == 0 {
 		t.Fatal("empty ICO")
 	}
@@ -73,12 +73,12 @@ func TestICOStructure(t *testing.T) {
 
 func TestSeverityColorsComplete(t *testing.T) {
 	for _, sev := range []string{"blocked", "down", "waiting", "working", "idle"} {
-		if len(IconBytes(sev, 32)) == 0 {
+		if len(Bytes(sev, 32)) == 0 {
 			t.Errorf("no icon bytes for %q", sev)
 		}
 	}
 	// unknown severity falls back to idle, not empty
-	if len(IconBytes("nonsense", 32)) == 0 {
+	if len(Bytes("nonsense", 32)) == 0 {
 		t.Error("unknown severity produced no icon")
 	}
 }
