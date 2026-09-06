@@ -21,8 +21,12 @@ when an agent finishes, blocks, or goes idle.
 ## What you get
 
 - **Tray icon** whose color tracks the fleet state: 🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all agents stopped, someone waits for you · ⚪ all idle.
-- **Tray menu** with one section per session and one row per agent
-  (status, runner, project, terminal title).
+- **Left click opens a flyout panel** (Windows): the fleet summary, one
+  block per herdr space with one colored row per agent, refreshed live.
+  It dismisses on click-outside, Escape, or after 8 s.
+- **Right click opens a menu** with the same information (and on Linux/macOS
+  the menu is the detail surface).
+- Toasts carry the space name and fleet summary as context.
 - **Attention popups** on `working → idle/done` and `anything → blocked`
   (Windows toast or `notify-send`; on by default, configurable).
 - Extra sinks when you want them: terminal bell, arbitrary commands
