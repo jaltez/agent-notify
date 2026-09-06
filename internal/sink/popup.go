@@ -162,6 +162,7 @@ func (p *Popup) Deliver(ctx context.Context, ev event.Event) error {
 	cmd := exec.CommandContext(cctx, p.binary,
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 		"-Command", toastScript)
+	cmd.SysProcAttr = proc.ChildSysProcAttr() // windows: no console flash
 	cmd.Env = p.toastEnv(title, body, extra, img)
 	cmd.Dir = p.dir
 	var stderr bytes.Buffer

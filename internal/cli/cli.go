@@ -268,6 +268,12 @@ func cmdTray(configPath string, log *slog.Logger, stderr io.Writer) int {
 		fmt.Fprintln(stderr, "no display available for the tray icon; use `agent-notify run` or `agent-notify monitor`")
 		return 1
 	}
+	release, err := acquireTrayLock()
+	if err != nil {
+		fmt.Fprintln(stderr, err)
+		return 1
+	}
+	defer release()
 	cfg := loadConfig(configPath, log)
 	eng, err := buildEngine(cfg, nil, log)
 	if err != nil {
