@@ -24,9 +24,13 @@ func newTracker(host, name string) *tracker {
 
 // apply folds a successful snapshot in and returns the transition events.
 // The first snapshot is a baseline: it populates state without events.
+// changed is true only when the view-relevant state actually moved — the
+// tray rebuilds its menu on it and must not do that every poll.
 func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event, changed bool) {
 	first := !t.seen
-	if t.seen && !t.up {
+	wasDown := t.seen && !t.up
+	changed = first || wasDown
+	if wasDown {
 		evs = append(evs, t.sessionEvent(event.KindSessionUp, now))
 	}
 	t.seen, t.up = true, true
@@ -40,20 +44,27 @@ func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event,
 		case !ok:
 			if !first {
 				evs = append(evs, t.agentEvent(event.KindAgentSpawned, herdr.Agent{}, a, now))
+				changed = true
 			}
 		case prev.Status != a.Status:
 			if ev := t.transition(prev, a, now); ev != nil {
 				evs = append(evs, *ev)
 			}
+			changed = true
+		case prev != a: // title/project/focus refresh: view-only change
+			changed = true
 		}
 	}
 	for k, prev := range t.agents {
-		if _, ok := next[k]; !ok && !first {
-			evs = append(evs, t.agentEvent(event.KindAgentLeft, prev, herdr.Agent{}, now))
+		if _, ok := next[k]; !ok {
+			if !first {
+				evs = append(evs, t.agentEvent(event.KindAgentLeft, prev, herdr.Agent{}, now))
+			}
+			changed = true
 		}
 	}
 	t.agents = next
-	return evs, true
+	return evs, changed
 }
 
 // transition maps a status change to an event, or nil for noise.

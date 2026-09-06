@@ -141,3 +141,43 @@ func TestViewSeverityAndCounts(t *testing.T) {
 		t.Errorf("summary = %q", s)
 	}
 }
+
+func TestApplyChangeDetection(t *testing.T) {
+	tr := newTracker("local", "work")
+	base := &herdr.Snapshot{Agents: []herdr.Agent{agent("working", "w1:p1", "Refactor auth")}}
+
+	// baseline appears
+	if _, changed := tr.apply(base, time.Now()); !changed {
+		t.Error("baseline should mark changed")
+	}
+	// identical snapshot: no change
+	if _, changed := tr.apply(base, time.Now()); changed {
+		t.Error("identical snapshot flagged as changed")
+	}
+	// status move
+	flipped := &herdr.Snapshot{Agents: []herdr.Agent{agent("idle", "w1:p1", "Refactor auth")}}
+	if _, changed := tr.apply(flipped, time.Now()); !changed {
+		t.Error("status change not detected")
+	}
+	// title-only refresh (view shows titles)
+	retitled := &herdr.Snapshot{Agents: []herdr.Agent{agent("idle", "w1:p1", "Fix login flow")}}
+	if _, changed := tr.apply(retitled, time.Now()); !changed {
+		t.Error("title change not detected")
+	}
+	// spawn
+	grown := &herdr.Snapshot{Agents: []herdr.Agent{
+		agent("idle", "w1:p1", "Fix login flow"),
+		agent("working", "w2:p1", "Write docs"),
+	}}
+	if _, changed := tr.apply(grown, time.Now()); !changed {
+		t.Error("spawn not detected")
+	}
+	// leave
+	if _, changed := tr.apply(retitled, time.Now()); !changed {
+		t.Error("leave not detected")
+	}
+	// and quiet again
+	if _, changed := tr.apply(retitled, time.Now()); changed {
+		t.Error("stable snapshot flagged as changed")
+	}
+}

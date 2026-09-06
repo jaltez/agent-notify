@@ -211,3 +211,39 @@ func TestEngineSessionFilter(t *testing.T) {
 		t.Fatalf("filter mismatch: %+v", e.View().Sessions)
 	}
 }
+
+func TestStateChangeQuietWhenStable(t *testing.T) {
+	e, fb := newTestEngine(t, event.Attention)
+	idle := herdr.Agent{PaneID: "w1:p1", Name: "claude", Status: "idle", Title: "Refactor auth"}
+	fb.set("work", idle)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go e.Run(ctx)
+
+	if !waitFor(t, 2*time.Second, func() bool { return len(e.View().Sessions) == 1 }) {
+		t.Fatal("baseline never appeared")
+	}
+	// drain any pending signal from the baseline
+	select {
+	case <-e.stateCh:
+	default:
+	}
+	// stable polls must not signal
+	deadline := time.Now().Add(400 * time.Millisecond)
+	for time.Now().Before(deadline) {
+		select {
+		case <-e.stateCh:
+			t.Fatal("state signal while snapshot unchanged")
+		default:
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	// a real transition must signal
+	fb.set("work", herdr.Agent{PaneID: "w1:p1", Name: "claude", Status: "working", Title: "Refactor auth"})
+	select {
+	case <-e.stateCh:
+	case <-time.After(2 * time.Second):
+		t.Fatal("no state signal after a real transition")
+	}
+}

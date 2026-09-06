@@ -8,6 +8,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"fyne.io/systray"
@@ -28,6 +29,12 @@ type Tray struct {
 	eng *engine.Engine
 	pop *sink.Popup // nil = silent icon-only mode
 	log *slog.Logger
+
+	// lastFP fingerprints the last rendered view; render() is called from
+	// the single refresh goroutine, so no lock is needed. Rebuilding the
+	// menu while it is open destroys it on Windows, so we rebuild only
+	// when the rendered content actually changes.
+	lastFP string
 }
 
 // New builds the tray sink.
@@ -90,9 +97,39 @@ func (t *Tray) refreshLoop(ctx context.Context, onTest func()) {
 
 func (t *Tray) render(onTest func()) {
 	v := t.eng.View()
+	fp := fingerprint(v)
+	if fp == t.lastFP {
+		return // nothing view-relevant changed; keep the menu untouched
+	}
+	t.lastFP = fp
 	systray.SetIcon(IconBytes(v.Severity(), iconSize))
 	systray.SetTooltip("agent-notify — " + v.Summary())
 	t.buildMenu(v, onTest)
+}
+
+// fingerprint captures everything the tray renders: severity, summary and
+// the menu rows. Identical fingerprint ⇒ identical pixels; skip the rebuild.
+func fingerprint(v engine.View) string {
+	var b strings.Builder
+	b.WriteString(v.Severity())
+	b.WriteByte('|')
+	b.WriteString(v.Summary())
+	for _, s := range v.Sessions {
+		b.WriteByte('|')
+		b.WriteString(s.Host)
+		b.WriteByte('/')
+		b.WriteString(s.Name)
+		if !s.Up {
+			b.WriteString("·off")
+		}
+		for _, a := range s.Agents {
+			b.WriteByte('|')
+			b.WriteString(agentLabel(a))
+			b.WriteByte(' ')
+			b.WriteString(a.Title)
+		}
+	}
+	return b.String()
 }
 
 // buildMenu (re)creates the whole menu. ResetMenu closes removed items'
