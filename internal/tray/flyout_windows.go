@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"os"
+	"sync"
 	"time"
 	"unicode/utf16"
 	"unsafe"
@@ -70,7 +71,7 @@ var (
 	procSelectObject          = gdi32.NewProc("SelectObject")
 	procSetBkMode             = gdi32.NewProc("SetBkMode")
 	procSetTextColor          = gdi32.NewProc("SetTextColor")
-	procDrawTextW             = gdi32.NewProc("DrawTextW")
+	procDrawTextW             = user32.NewProc("DrawTextW")
 	procEllipse               = gdi32.NewProc("Ellipse")
 	procCreateRoundRectRgn    = gdi32.NewProc("CreateRoundRectRgn")
 	procSetWindowRgn          = user32.NewProc("SetWindowRgn")
@@ -78,9 +79,14 @@ var (
 	procSetTimer              = user32.NewProc("SetTimer")
 	procKillTimer             = user32.NewProc("KillTimer")
 	procShowWindow            = user32.NewProc("ShowWindow")
-	procFrameRect             = gdi32.NewProc("FrameRect")
+	procFrameRect             = user32.NewProc("FrameRect")
 	procGetModuleHandleW      = kernel32.NewProc("GetModuleHandleW")
 	procGetWindowLongPtrW     = user32.NewProc("GetWindowLongPtrW")
+	procPeekMessageW          = user32.NewProc("PeekMessageW")
+	procTranslateMessage      = user32.NewProc("TranslateMessage")
+	procDispatchMessageW      = user32.NewProc("DispatchMessageW")
+	procGetWindowRect         = user32.NewProc("GetWindowRect")
+	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
 	procPostMessageW          = user32.NewProc("PostMessageW")
 	procInvalidateRect        = user32.NewProc("InvalidateRect")
 )
@@ -119,6 +125,11 @@ type flyout struct {
 	log     *slog.Logger
 	hwnd    windows.HWND
 	visible bool
+	// diagnostics, touched from the window thread (and flytest)
+	paintPanics int
+	lastPanic   string
+	paints      int
+	mu          sync.Mutex
 	// activated tracks whether we actually hold foreground: the
 	// deactivate-hide (click outside) may only fire when we had it,
 	// otherwise a lost foreground race hides the panel instantly.
@@ -129,10 +140,18 @@ type flyout struct {
 
 var currentFly *flyout
 
-func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintptr {
+func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintptr) {
 	// A panic here would take the whole tray process down (the callback
-	// crosses the Win32 boundary); degrade to a visual glitch instead.
-	defer func() { _ = recover() }()
+	// crosses the Win32 boundary); degrade to a visual glitch instead,
+	// but remember it — a silent blank window is miserable to debug.
+	defer func() {
+		if r := recover(); r != nil {
+			currentFly.mu.Lock()
+			currentFly.paintPanics++
+			currentFly.lastPanic = fmt.Sprint(r)
+			currentFly.mu.Unlock()
+		}
+	}()
 	f := currentFly
 	if f == nil {
 		// messages during window creation arrive before the instance
@@ -164,6 +183,7 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 			return 0
 		}
 	case 0x000F: // WM_PAINT
+		f.paints++
 		f.paint(hwnd)
 		return 0
 	case 0x0113: // WM_TIMER
@@ -387,6 +407,16 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	defer procEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 
 	rows, h := f.rowsAndHeight()
+	// live refresh can add rows after show(); grow the window to fit
+	if cur := f.rectHeight(); cur != h {
+		const (
+			swpNoMove     = 0x0002
+			swpNoZorder   = 0x0004
+			swpNoActivate = 0x0010
+		)
+		procSetWindowPos.Call(uintptr(f.hwnd), 0, 0, 0, uintptr(flyWidth), uintptr(h),
+			swpNoMove|swpNoZorder|swpNoActivate)
+	}
 	bg, _, _ := procCreateSolidBrush.Call(uintptr(colorBG))
 	defer procDeleteObject.Call(bg)
 	border, _, _ := procCreateSolidBrush.Call(uintptr(colorBorder))
@@ -490,8 +520,9 @@ func createFont(height, weight int32) windows.Handle {
 // Flyout is the exported handle used by diagnostics (agent-notify flytest).
 type Flyout = flyout
 
-// SelfTest drives the show/hide cycle and prints real window state —
-// deterministic verification without an interactive click.
+// SelfTest drives the show/hide cycle, pumping messages like the real
+// tray does, and prints full window state — deterministic verification
+// without an interactive click.
 func (f *flyout) SelfTest() {
 	if f.hwnd == 0 {
 		fmt.Println("flytest: no window")
@@ -499,11 +530,49 @@ func (f *flyout) SelfTest() {
 	}
 	fmt.Println("flytest: window", uint32(f.hwnd))
 	f.show()
-	fmt.Println("flytest: after show  visible(flag)=", f.visible, " WS_VISIBLE=", wsVisible(f.hwnd))
-	time.Sleep(700 * time.Millisecond)
-	fmt.Println("flytest: @700ms      visible(flag)=", f.visible, " WS_VISIBLE=", wsVisible(f.hwnd), " activated=", f.activated)
+	f.pump(1200 * time.Millisecond)
+	f.mu.Lock()
+	fmt.Println("flytest: after show  visible=", f.visible, " activated=", f.activated,
+		" paints=", f.paints, " paintPanics=", f.paintPanics, " lastPanic=", f.lastPanic)
+	f.mu.Unlock()
+	fmt.Println("flytest: rect=", f.rectString())
+	fg, _, _ := procGetForegroundWindow.Call()
+	fmt.Println("flytest: foreground=", fg == uintptr(f.hwnd))
 	f.hide()
-	fmt.Println("flytest: after hide  visible(flag)=", f.visible, " WS_VISIBLE=", wsVisible(f.hwnd))
+	f.pump(300 * time.Millisecond)
+	fmt.Println("flytest: after hide  visible=", f.visible)
+}
+
+// pump dispatches window messages for d (must run on the window thread).
+func (f *flyout) pump(d time.Duration) {
+	deadline := time.Now().Add(d)
+	var msg [7]uintptr // MSG (size on win64 = 48 bytes; use raw buffer)
+	_ = msg
+	deadlineMs := uint32(time.Now().Add(d).UnixMilli())
+	for time.Now().Before(deadline) {
+		const pmRemove = 0x0001
+		have, _, _ := procPeekMessageW.Call(uintptr(unsafe.Pointer(&msg[0])), 0, 0, 0, pmRemove)
+		if have != 0 {
+			procTranslateMessage.Call(uintptr(unsafe.Pointer(&msg[0])))
+			procDispatchMessageW.Call(uintptr(unsafe.Pointer(&msg[0])))
+		} else {
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	_ = deadlineMs
+}
+
+func (f *flyout) rectHeight() int32 {
+	var rc RECT
+	procGetWindowRect.Call(uintptr(f.hwnd), uintptr(unsafe.Pointer(&rc)))
+	return rc.Bottom - rc.Top
+}
+
+func (f *flyout) rectString() string {
+	var rc RECT
+	procGetWindowRect.Call(uintptr(f.hwnd), uintptr(unsafe.Pointer(&rc)))
+	return fmt.Sprintf("left=%d top=%d right=%d bottom=%d (w=%d h=%d)",
+		rc.Left, rc.Top, rc.Right, rc.Bottom, rc.Right-rc.Left, rc.Bottom-rc.Top)
 }
 
 func wsVisible(hwnd windows.HWND) bool {
