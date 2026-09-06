@@ -80,13 +80,21 @@ func (t *Tray) onReady(ctx context.Context, onTest func()) {
 	systray.SetIcon(icon.Bytes("idle", iconSize))
 	systray.SetTooltip("agent-notify — starting…")
 	t.render(onTest)
-	// Left click opens the flyout panel where supported; right click
-	// keeps the native menu everywhere.
-	t.fly = newFlyout(t.eng)
-	if t.fly != nil {
-		systray.SetOnTapped(t.fly.toggle)
-	}
 	go t.refreshLoop(ctx, onTest)
+}
+
+// InitFlyout creates the flyout panel. It must run on the main OS thread
+// BEFORE Run enters the message loop: window creation has thread
+// affinity, and only that thread pumps messages. On success, tray left
+// click toggles the panel; right click keeps the native menu.
+func (t *Tray) InitFlyout() {
+	fly, ferr := newFlyout(t.eng, t.log)
+	if ferr != nil {
+		t.log.Warn("flyout panel unavailable; left click will open the menu", "error", ferr)
+		return
+	}
+	t.fly = fly
+	systray.SetOnTapped(t.fly.toggle)
 }
 
 // refreshLoop renders the view on state changes, debouncing bursts.

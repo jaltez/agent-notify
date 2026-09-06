@@ -4,7 +4,10 @@ package tray
 
 import (
 	"fmt"
+	"log/slog"
+	"os"
 	"time"
+	"unicode/utf16"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -63,7 +66,7 @@ var (
 	procFillRect              = user32.NewProc("FillRect")
 	procCreateSolidBrush      = gdi32.NewProc("CreateSolidBrush")
 	procDeleteObject          = gdi32.NewProc("DeleteObject")
-	procCreateFontW           = gdi32.NewProc("CreateFontW")
+	procCreateFontIndirectW   = gdi32.NewProc("CreateFontIndirectW")
 	procSelectObject          = gdi32.NewProc("SelectObject")
 	procSetBkMode             = gdi32.NewProc("SetBkMode")
 	procSetTextColor          = gdi32.NewProc("SetTextColor")
@@ -77,6 +80,7 @@ var (
 	procShowWindow            = user32.NewProc("ShowWindow")
 	procFrameRect             = gdi32.NewProc("FrameRect")
 	procGetModuleHandleW      = kernel32.NewProc("GetModuleHandleW")
+	procGetWindowLongPtrW     = user32.NewProc("GetWindowLongPtrW")
 	procPostMessageW          = user32.NewProc("PostMessageW")
 	procInvalidateRect        = user32.NewProc("InvalidateRect")
 )
@@ -112,18 +116,29 @@ type WNDCLASSEX struct {
 
 type flyout struct {
 	eng     *engine.Engine
+	log     *slog.Logger
 	hwnd    windows.HWND
 	visible bool
-	font    windows.Handle
-	bold    windows.Handle
+	// activated tracks whether we actually hold foreground: the
+	// deactivate-hide (click outside) may only fire when we had it,
+	// otherwise a lost foreground race hides the panel instantly.
+	activated bool
+	font      windows.Handle
+	bold      windows.Handle
 }
 
 var currentFly *flyout
 
 func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintptr {
+	// A panic here would take the whole tray process down (the callback
+	// crosses the Win32 boundary); degrade to a visual glitch instead.
+	defer func() { _ = recover() }()
 	f := currentFly
 	if f == nil {
-		return 0
+		// messages during window creation arrive before the instance
+		// is wired up — WM_NCCREATE must reach DefWindowProc
+		ret, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
+		return ret
 	}
 	switch msg {
 	case wmAppToggle:
@@ -136,7 +151,12 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 		return 0
 	case 0x0006: // WM_ACTIVATE
 		if uint16(wParam) == 0 { // WA_INACTIVE — click landed outside
-			f.hide()
+			if f.activated {
+				f.activated = false
+				f.hide()
+			}
+		} else {
+			f.activated = true
 		}
 	case 0x0100: // WM_KEYDOWN
 		if wParam == 0x1B { // VK_ESCAPE
@@ -162,44 +182,59 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) uintptr {
 }
 
 // newFlyout registers the class and creates the hidden panel. Call from
-// the systray message thread (onReady).
-func newFlyout(eng *engine.Engine) *flyout {
+// the systray message thread (onReady). Failure degrades to the plain
+// tray menu; the error says why.
+func newFlyout(eng *engine.Engine, log *slog.Logger) (*flyout, error) {
 	inst, _, _ := procGetModuleHandleW.Call(0)
 	if inst == 0 {
-		return nil
+		return nil, fmt.Errorf("GetModuleHandleW failed")
 	}
-	cls, _ := windows.UTF16PtrFromString(flyClassName)
+	cls, err := windows.UTF16PtrFromString(flyClassName)
+	if err != nil {
+		return nil, err
+	}
+	cb := windows.NewCallback(flyWndProc)
 	wc := WNDCLASSEX{
 		Size:      uint32(unsafe.Sizeof(WNDCLASSEX{})),
-		WndProc:   windows.NewCallback(flyWndProc),
+		WndProc:   cb,
 		Instance:  windows.Handle(inst),
 		ClassName: cls,
 	}
-	if r, _, _ := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
-		return nil
+	if r, _, err2 := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
+		return nil, fmt.Errorf("RegisterClassExW: %v", err2)
 	}
-	f := &flyout{eng: eng}
+	f := &flyout{eng: eng, log: log}
 	f.font = createFont(-15, 400)
 	f.bold = createFont(-15, 600)
-	title, _ := windows.UTF16PtrFromString("agent-notify")
+	title, err := windows.UTF16PtrFromString("agent-notify")
+	if err != nil {
+		return nil, err
+	}
 	const wsPopup = 0x80000000
-	hwnd, _, _ := procCreateWindowExW.Call(
+	hwnd, _, callErr := procCreateWindowExW.Call(
 		0x00000080|0x00000020, // WS_EX_TOPMOST | WS_EX_TOOLWINDOW
 		uintptr(unsafe.Pointer(cls)),
 		uintptr(unsafe.Pointer(title)),
 		uintptr(wsPopup),
 		0, 0, 0, 0,
-		0, 0, uintptr(inst), 0)
+		0, 0, inst, 0)
 	if hwnd == 0 {
-		return nil
+		return nil, fmt.Errorf("CreateWindowExW: %v", callErr)
 	}
 	f.hwnd = windows.HWND(hwnd)
 	currentFly = f
-	return f
+	if log != nil {
+		const gwlplWndProc = ^uintptr(3) // GWLP_WNDPROC (-4)
+		got, _, _ := procGetWindowLongPtrW.Call(uintptr(f.hwnd), gwlplWndProc)
+		log.Debug(fmt.Sprintf("flyout created: pid=%d hwnd=%v callback=%#x wndproc=%#x",
+			os.Getpid(), f.hwnd, cb, got))
+	}
+	return f, nil
 }
 
 // toggle shows or hides the panel (tray left click).
 func (f *flyout) toggle() {
+	f.debugf("flyout toggle: visible=%v", f.visible)
 	if f.visible {
 		f.hide()
 		return
@@ -211,20 +246,28 @@ func (f *flyout) show() {
 	_, h := f.rowsAndHeight()
 	var area RECT
 	const spiGetWorkArea = 0x0030
-	procSystemParametersInfoW.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&area)), 0)
+	if r, _, err := procSystemParametersInfoW.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&area)), 0); r == 0 {
+		f.debugf("flyout show: work area query failed: %v", err)
+	}
 	w := int32(flyWidth)
 	x := area.Right - w - 12
 	y := area.Bottom - h - 8
 	rgn, _, _ := procCreateRoundRectRgn.Call(0, 0, uintptr(w+1), uintptr(h+1), 14, 14)
 	procSetWindowRgn.Call(uintptr(f.hwnd), rgn, 1)
 	const (
-		hwndTopmost   = uintptr(0xFFFFFFFF) // HWND_TOPMOST (-1)
+		hwndTopmost   = ^uintptr(0) // HWND_TOPMOST (-1)
 		swpShowWindow = 0x0040
 	)
-	procSetWindowPos.Call(uintptr(f.hwnd), hwndTopmost,
+	if r, _, err := procSetWindowPos.Call(uintptr(f.hwnd), hwndTopmost,
 		uintptr(x), uintptr(y), uintptr(w), uintptr(h),
-		swpShowWindow)
-	procSetForegroundWindow.Call(uintptr(f.hwnd))
+		swpShowWindow); r == 0 {
+		f.debugf("flyout show: SetWindowPos failed: %v", err)
+	}
+	if r, _, _ := procSetForegroundWindow.Call(uintptr(f.hwnd)); r != 0 {
+		f.activated = true
+	} else {
+		f.activated = false // foreground denied: rely on auto-close/toggle
+	}
 	procSetTimer.Call(uintptr(f.hwnd), timerAutoclose, uintptr(autoCloseDelay.Milliseconds()), 0)
 	procSetTimer.Call(uintptr(f.hwnd), timerRefresh, uintptr(refreshEvery.Milliseconds()), 0)
 	f.visible = true
@@ -234,10 +277,18 @@ func (f *flyout) hide() {
 	if !f.visible {
 		return
 	}
+	f.debugf("flyout hide")
+	f.activated = false
 	procKillTimer.Call(uintptr(f.hwnd), timerAutoclose)
 	procKillTimer.Call(uintptr(f.hwnd), timerRefresh)
 	procShowWindowCall(f.hwnd, 0) // SW_HIDE
 	f.visible = false
+}
+
+func (f *flyout) debugf(format string, args ...any) {
+	if f.log != nil {
+		f.log.Debug(fmt.Sprintf(format, args...))
+	}
 }
 
 func procShowWindowCall(hwnd windows.HWND, cmd int32) {
@@ -401,15 +452,62 @@ func (f *flyout) drawText(hdc uintptr, text string, x, y, w, h int32, bold, dim 
 		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtVCenter|dtEndEllips))
 }
 
+// logfontW mirrors the Win32 LOGFONTW layout (92 bytes).
+type logfontW struct {
+	Height         int32
+	Width          int32
+	Escapement     int32
+	Orientation    int32
+	Weight         int32
+	Italic         uint8
+	Underline      uint8
+	StrikeOut      uint8
+	CharSet        uint8
+	OutPrecision   uint8
+	ClipPrecision  uint8
+	Quality        uint8
+	PitchAndFamily uint8
+	FaceName       [32]uint16
+}
+
+// createFont builds a font via CreateFontIndirectW. CreateFontW/
+// CreateFontA are avoided deliberately: they deterministically access-
+// violate on some systems once lfHeight is negative (observed on this
+// machine with any arguments), while the indirect path works.
 func createFont(height, weight int32) windows.Handle {
-	const (
-		defaultCharset = 1
-		clearTypeQual  = 5
-	)
-	h, _, _ := procCreateFontW.Call(
-		uintptr(uint32(height)), 0, 0, 0,
-		uintptr(uint32(weight)), 0, 0, 0,
-		0, 0, 0, 0,
-		defaultCharset, clearTypeQual)
+	lf := logfontW{
+		Height:         height,
+		Weight:         weight,
+		CharSet:        1,    // DEFAULT_CHARSET
+		Quality:        5,    // CLEARTYPE_QUALITY
+		PitchAndFamily: 0x22, // DEFAULT_PITCH | FF_DONTCARE
+	}
+	copy(lf.FaceName[:], []uint16(utf16.Encode([]rune("Segoe UI"))))
+	h, _, _ := procCreateFontIndirectW.Call(uintptr(unsafe.Pointer(&lf)))
 	return windows.Handle(h)
+}
+
+// Flyout is the exported handle used by diagnostics (agent-notify flytest).
+type Flyout = flyout
+
+// SelfTest drives the show/hide cycle and prints real window state —
+// deterministic verification without an interactive click.
+func (f *flyout) SelfTest() {
+	if f.hwnd == 0 {
+		fmt.Println("flytest: no window")
+		return
+	}
+	fmt.Println("flytest: window", uint32(f.hwnd))
+	f.show()
+	fmt.Println("flytest: after show  visible(flag)=", f.visible, " WS_VISIBLE=", wsVisible(f.hwnd))
+	time.Sleep(700 * time.Millisecond)
+	fmt.Println("flytest: @700ms      visible(flag)=", f.visible, " WS_VISIBLE=", wsVisible(f.hwnd), " activated=", f.activated)
+	f.hide()
+	fmt.Println("flytest: after hide  visible(flag)=", f.visible, " WS_VISIBLE=", wsVisible(f.hwnd))
+}
+
+func wsVisible(hwnd windows.HWND) bool {
+	const gwlStyle = ^uintptr(15) // GWL_STYLE (-16)
+	st, _, _ := procGetWindowLongPtrW.Call(uintptr(hwnd), gwlStyle)
+	return st&0x10000000 != 0 // WS_VISIBLE
 }
