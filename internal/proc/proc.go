@@ -13,13 +13,19 @@ import (
 	"os/exec"
 	"runtime"
 	"strings"
+	"syscall"
 	"unicode/utf16"
 )
+
+// ChildSysProcAttr returns the SysProcAttr all child processes must use
+// (Windows: suppress child console windows; elsewhere: nil).
+func ChildSysProcAttr() *syscall.SysProcAttr { return childSysProcAttr() }
 
 // Run executes argv and returns stdout. Errors carry a trimmed snippet of
 // stderr so callers see the real cause (e.g. herdr's "server_not_running").
 func Run(ctx context.Context, argv []string, extraEnv []string, dir string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
+	cmd.SysProcAttr = childSysProcAttr() // windows: no child console windows
 	if len(extraEnv) > 0 {
 		cmd.Env = append(os.Environ(), extraEnv...)
 	}
