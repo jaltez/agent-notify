@@ -62,8 +62,10 @@ func (v View) Counts() Counts {
 	return c
 }
 
-// Severity is the worst state in the view, driving the tray icon color:
-// blocked > down > waiting > working > idle.
+// Severity is the view state driving the tray icon color. Precedence:
+// blocked (red) > offline (amber) > working (blue) > waiting (green) >
+// idle (gray). Working beats waiting so a busy fleet reads as "busy";
+// green shows only when every agent stopped and at least one wants you.
 func (v View) Severity() string {
 	c := v.Counts()
 	switch {
@@ -71,10 +73,10 @@ func (v View) Severity() string {
 		return "blocked"
 	case c.Down > 0:
 		return "down"
-	case c.Waiting > 0:
-		return "waiting"
 	case c.Working > 0:
 		return "working"
+	case c.Waiting > 0:
+		return "waiting"
 	default:
 		return "idle"
 	}

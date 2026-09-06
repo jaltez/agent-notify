@@ -1,13 +1,19 @@
 // Package tray renders the agent-notify system-tray UI: an icon whose
 // color follows the most severe live state, a tooltip summary, and a
-// per-session/per-agent menu rebuilt on change. Attention popups are
-// delegated to the popup sink, which the Tray forwards events to.
+// per-session/per-agent menu. Attention popups are delegated to the popup
+// sink, which the Tray forwards events to.
+//
+// Menu updates are in place: Windows destroys a popup menu whose items
+// get reset while it is open, so titles are updated via SetTitle and a
+// full rebuild happens only when the menu's structure (sessions, agent
+// counts) changes.
 package tray
 
 import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strconv"
 	"strings"
 	"time"
 
@@ -24,17 +30,23 @@ const (
 	debounce       = 300 * time.Millisecond
 )
 
+// menuTree mirrors the live menu so rows can be updated in place.
+type menuTree struct {
+	summary *systray.MenuItem
+	headers []*systray.MenuItem // one per session, in view order
+	agents  []*systray.MenuItem // flattened across sessions, in view order
+}
+
 // Tray is both a sink (event → popup) and a live view renderer.
 type Tray struct {
 	eng *engine.Engine
 	pop *sink.Popup // nil = silent icon-only mode
 	log *slog.Logger
 
-	// lastFP fingerprints the last rendered view; render() is called from
-	// the single refresh goroutine, so no lock is needed. Rebuilding the
-	// menu while it is open destroys it on Windows, so we rebuild only
-	// when the rendered content actually changes.
-	lastFP string
+	// touched only from the single refresh goroutine.
+	tree          *menuTree
+	lastFP        string // rendered content fingerprint
+	lastStructure string // structural key: sessions + agent counts
 }
 
 // New builds the tray sink.
@@ -65,7 +77,7 @@ func (t *Tray) Run(ctx context.Context, onTest func()) {
 func (t *Tray) onReady(ctx context.Context, onTest func()) {
 	systray.SetIcon(IconBytes("idle", iconSize))
 	systray.SetTooltip("agent-notify — starting…")
-	t.buildMenu(engine.View{}, onTest)
+	t.render(onTest)
 	go t.refreshLoop(ctx, onTest)
 }
 
@@ -101,27 +113,50 @@ func (t *Tray) render(onTest func()) {
 	if fp == t.lastFP {
 		return // nothing view-relevant changed; keep the menu untouched
 	}
-	t.lastFP = fp
+
 	systray.SetIcon(IconBytes(v.Severity(), iconSize))
 	systray.SetTooltip("agent-notify — " + v.Summary())
-	t.buildMenu(v, onTest)
+
+	if structure := structuralKey(v); structure != t.lastStructure {
+		t.lastStructure = structure
+		t.rebuildMenu(v, onTest)
+	} else if t.tree != nil {
+		t.updateMenu(v)
+	}
+	t.lastFP = fp
 }
 
-// fingerprint captures everything the tray renders: severity, summary and
-// the menu rows. Identical fingerprint ⇒ identical pixels; skip the rebuild.
-func fingerprint(v engine.View) string {
+// structuralKey captures the menu's row layout. Anything else (statuses,
+// titles, projects) updates in place.
+func structuralKey(v engine.View) string {
 	var b strings.Builder
-	b.WriteString(v.Severity())
-	b.WriteByte('|')
-	b.WriteString(v.Summary())
+	b.WriteString(strconv.Itoa(len(v.Sessions)))
 	for _, s := range v.Sessions {
 		b.WriteByte('|')
 		b.WriteString(s.Host)
 		b.WriteByte('/')
 		b.WriteString(s.Name)
-		if !s.Up {
-			b.WriteString("·off")
+		b.WriteByte(':')
+		if s.Up {
+			b.WriteByte('u')
+		} else {
+			b.WriteByte('d')
 		}
+		b.WriteString(strconv.Itoa(len(s.Agents)))
+	}
+	return b.String()
+}
+
+// fingerprint captures everything the tray renders; identical fingerprint
+// ⇒ identical pixels, skip the redraw.
+func fingerprint(v engine.View) string {
+	var b strings.Builder
+	b.WriteString(v.Severity())
+	b.WriteByte('|')
+	b.WriteString(v.Summary())
+	b.WriteByte('|')
+	b.WriteString(structuralKey(v))
+	for _, s := range v.Sessions {
 		for _, a := range s.Agents {
 			b.WriteByte('|')
 			b.WriteString(agentLabel(a))
@@ -132,26 +167,25 @@ func fingerprint(v engine.View) string {
 	return b.String()
 }
 
-// buildMenu (re)creates the whole menu. ResetMenu closes removed items'
+// rebuildMenu (re)creates the whole menu. ResetMenu closes removed items'
 // ClickedCh channels, so the per-item handler goroutines exit cleanly.
-func (t *Tray) buildMenu(v engine.View, onTest func()) {
+// Only structural changes reach this.
+func (t *Tray) rebuildMenu(v engine.View, onTest func()) {
 	systray.ResetMenu()
 
 	summary := systray.AddMenuItem(v.Summary(), "Live agent status")
 	summary.Disable()
 	systray.AddSeparator()
 
+	tree := &menuTree{summary: summary}
 	if len(v.Sessions) == 0 {
 		m := systray.AddMenuItem("No sessions yet", "Waiting for herdr sessions to appear")
 		m.Disable()
 	}
 	for _, s := range v.Sessions {
-		label := fmt.Sprintf("%s/%s", s.Host, s.Name)
-		if !s.Up {
-			label += " · offline"
-		}
-		hdr := systray.AddMenuItem(label, "herdr session")
+		hdr := systray.AddMenuItem(sessionLabel(s), "herdr session")
 		hdr.Disable()
+		tree.headers = append(tree.headers, hdr)
 		for i, a := range s.Agents {
 			if i >= maxAgentsShown {
 				more := systray.AddMenuItem(fmt.Sprintf("… and %d more", len(s.Agents)-maxAgentsShown), "")
@@ -160,6 +194,7 @@ func (t *Tray) buildMenu(v engine.View, onTest func()) {
 			}
 			item := hdr.AddSubMenuItem(agentLabel(a), a.Title)
 			item.Disable()
+			tree.agents = append(tree.agents, item)
 		}
 		if len(s.Agents) == 0 && s.Up {
 			empty := hdr.AddSubMenuItem("(no agents)", "")
@@ -182,6 +217,40 @@ func (t *Tray) buildMenu(v engine.View, onTest func()) {
 			systray.Quit()
 		}
 	}()
+	t.tree = tree
+}
+
+// updateMenu rewrites titles/tooltips on the existing menu — safe while
+// the menu is open (Windows paints the new strings in place).
+func (t *Tray) updateMenu(v engine.View) {
+	t.tree.summary.SetTitle(v.Summary())
+	hi, row := 0, 0
+	for _, s := range v.Sessions {
+		if hi < len(t.tree.headers) {
+			t.tree.headers[hi].SetTitle(sessionLabel(s))
+			hi++
+		}
+		// agent rows are flattened in the order the menu was built with
+		// (the engine's View is already sorted)
+		for i, a := range s.Agents {
+			if i >= maxAgentsShown {
+				break
+			}
+			if row < len(t.tree.agents) {
+				t.tree.agents[row].SetTitle(agentLabel(a))
+				t.tree.agents[row].SetTooltip(a.Title)
+				row++
+			}
+		}
+	}
+}
+
+func sessionLabel(s engine.SessionView) string {
+	label := fmt.Sprintf("%s/%s", s.Host, s.Name)
+	if !s.Up {
+		label += " · offline"
+	}
+	return label
 }
 
 func agentLabel(a engine.AgentView) string {

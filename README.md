@@ -20,8 +20,7 @@ when an agent finishes, blocks, or goes idle.
 
 ## What you get
 
-- **Tray icon** whose color tracks the worst live state across sessions:
-  🔴 blocked · 🟠 session offline · 🟢 waiting for you · 🔵 working · ⚪ idle.
+- **Tray icon** whose color tracks the fleet state: 🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all agents stopped, someone waits for you · ⚪ all idle.
 - **Tray menu** with one section per session and one row per agent
   (status, runner, project, terminal title).
 - **Attention popups** on `working → idle/done` and `anything → blocked`
