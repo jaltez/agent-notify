@@ -40,6 +40,7 @@ Commands:
   test        send a test notification through every configured sink
   init        write an annotated example config
   version     print version information
+  flytest     diagnostics: drive the flyout show/hide cycle
   help        show this help
 
 Flags:
@@ -102,6 +103,8 @@ subcommand:
 		return cmdInit(configPath, rest, stdout)
 	case "version":
 		return cmdVersion(stdout)
+	case "flytest":
+		return cmdFlytest(configPath, stdout, log)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 		return 2
@@ -305,6 +308,9 @@ func cmdTray(configPath string, log *slog.Logger, stderr io.Writer) int {
 			break
 		}
 	}
+	// The flyout window must be created on this (locked, main) thread
+	// before the message loop starts pumping.
+	traySink.InitFlyout()
 	traySink.Run(ctx, func() {
 		mgr.Deliver(testEvent())
 	})
@@ -495,6 +501,22 @@ func cmdInit(configPath string, args []string, stdout io.Writer) int {
 		return 1
 	}
 	fmt.Fprintf(stdout, "wrote %s\n", path)
+	return 0
+}
+
+func cmdFlytest(configPath string, stdout io.Writer, log *slog.Logger) int {
+	cfg := loadConfig(configPath, log)
+	eng, err := buildEngine(cfg, nil, log)
+	if err != nil {
+		fmt.Fprintln(stdout, "engine:", err)
+		return 1
+	}
+	fly, err := newTrayFlyout(eng, log)
+	if err != nil {
+		fmt.Fprintln(stdout, "flyout:", err)
+		return 1
+	}
+	fly.SelfTest()
 	return 0
 }
 
