@@ -68,9 +68,13 @@ type  = "tray"
 popup = true
 
 # Standalone desktop popup without the tray (Windows toast via PowerShell,
-# notify-send elsewhere). expire only applies to notify-send (milliseconds).
+# notify-send elsewhere). Toasts carry three lines: title (from the render
+# templates), body, and "project · session — fleet summary". image adds a
+# severity-colored logo (native Windows only); expire only applies to
+# notify-send (milliseconds).
 [[sink]]
 type    = "popup"
+# image  = true            # severity-colored toast logo
 # binary = "notify-send"   # force a specific notifier binary
 # expire = "5s"
 # app_id = "..."           # Windows AppUserModelID override

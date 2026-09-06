@@ -9,10 +9,12 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"agent-notify/internal/config"
 	"agent-notify/internal/event"
+	"agent-notify/internal/icon"
 	"agent-notify/internal/proc"
 	"agent-notify/internal/render"
 )
@@ -21,16 +23,28 @@ import (
 // which ships an AppUserModelID that needs no Start Menu shortcut.
 const defaultPowerShellAUMID = `{1AC14E77-02E7-4E5D-B744-2EB1AE5198B7}\WindowsPowerShell\v1.0\powershell.exe`
 
-// toastScript raises a Windows toast using the WinRT toast API. The title,
-// body and AppUserModelID travel in environment variables so no quoting or
-// escaping of user content is ever needed.
+// toastScript raises a Windows toast using the WinRT toast API. The
+// payload travels in environment variables so no quoting or escaping of
+// user content is ever needed. AN_IMG selects the image+3-line template
+// (Windows-native only, where the file path is Windows-visible);
+// AN_EXTRA adds a third text line (space + fleet summary).
 const toastScript = `
 try {
   [Windows.UI.Notifications.ToastNotificationManager, Windows.UI.Notifications, ContentType = WindowsRuntime] | Out-Null
-  $x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent([Windows.UI.Notifications.ToastTemplateType]::ToastText02)
+  $tpl = [Windows.UI.Notifications.ToastTemplateType]::ToastText02
+  if ($env:AN_IMG) { $tpl = [Windows.UI.Notifications.ToastTemplateType]::ToastImageAndText04 }
+  elseif ($env:AN_EXTRA) { $tpl = [Windows.UI.Notifications.ToastTemplateType]::ToastText04 }
+  $x = [Windows.UI.Notifications.ToastNotificationManager]::GetTemplateContent($tpl)
+  if ($env:AN_IMG) {
+    $img = $x.GetElementsByTagName('image').Item(0)
+    [void]$img.SetAttribute('src', $env:AN_IMG)
+    [void]$img.SetAttribute('placement', 'appLogoOverride')
+    [void]$img.SetAttribute('crop', 'circle')
+  }
   $t = $x.GetElementsByTagName('text')
   [void]$t.Item(0).AppendChild($x.CreateTextNode($env:AN_TITLE))
   [void]$t.Item(1).AppendChild($x.CreateTextNode($env:AN_BODY))
+  if ($env:AN_EXTRA -and $t.Length -gt 2) { [void]$t.Item(2).AppendChild($x.CreateTextNode($env:AN_EXTRA)) }
   $n = [Windows.UI.Notifications.ToastNotification]::new($x)
   [Windows.UI.Notifications.ToastNotificationManager]::CreateToastNotifier($env:AN_APPID).Show($n)
 } catch { Write-Error $_; exit 1 }
@@ -38,6 +52,9 @@ try {
 
 // popupTimeout bounds one popup command.
 const popupTimeout = 15 * time.Second
+
+// toastImageSize is the logo disc size for toasts.
+const toastImageSize = 96
 
 // Popup shows desktop notifications: a Windows toast via PowerShell
 // (native Windows, or from WSL through interop), or notify-send elsewhere.
@@ -47,7 +64,15 @@ type Popup struct {
 	appID  string
 	expire time.Duration
 	dir    string
+	image  bool // severity logo in toasts (native Windows only)
 	r      *render.Renderer
+
+	// Extra optionally supplies a third toast line (space + fleet
+	// summary); wired by the CLI to the engine's live view.
+	extra func(event.Event) string
+
+	imgMu   sync.Mutex
+	imgPath map[string]string // severity → rendered PNG path
 }
 
 // NewPopup resolves the popup mechanism. With no explicit Binary the order
@@ -55,10 +80,14 @@ type Popup struct {
 // powershell.exe via WSL interop. It errors when nothing is available.
 func NewPopup(cfg config.Sink, r *render.Renderer) (*Popup, error) {
 	p := &Popup{
-		appID:  cfg.AppID,
-		expire: cfg.Expire.D(),
-		dir:    proc.InteropDir(),
-		r:      r,
+		appID:   cfg.AppID,
+		expire:  cfg.Expire.D(),
+		dir:     proc.InteropDir(),
+		r:       r,
+		imgPath: map[string]string{},
+	}
+	if cfg.Image == nil || *cfg.Image {
+		p.image = runtime.GOOS == "windows" // toast images need a Windows-visible path
 	}
 	if p.appID == "" {
 		p.appID = defaultPowerShellAUMID
@@ -96,6 +125,9 @@ func NewPopup(cfg config.Sink, r *render.Renderer) (*Popup, error) {
 	return nil, fmt.Errorf("no popup backend found (need notify-send or powershell.exe in PATH)")
 }
 
+// SetExtra wires the optional third toast line (space + fleet summary).
+func (p *Popup) SetExtra(fn func(event.Event) string) { p.extra = fn }
+
 // Mode reports the resolved mechanism ("powershell" or "notify-send").
 func (p *Popup) Mode() string { return p.mode }
 
@@ -103,10 +135,17 @@ func (p *Popup) Name() string { return "popup" }
 
 func (p *Popup) Deliver(ctx context.Context, ev event.Event) error {
 	title, body := p.r.Render(ev)
+	extra := ""
+	if p.extra != nil {
+		extra = p.extra(ev)
+	}
 	cctx, cancel := context.WithTimeout(ctx, popupTimeout)
 	defer cancel()
 
 	if p.mode == "notify-send" {
+		if extra != "" {
+			body += "\n" + extra
+		}
 		argv := []string{p.binary, "-a", "agent-notify"}
 		if p.expire > 0 {
 			argv = append(argv, "-t", fmt.Sprintf("%d", p.expire.Milliseconds()))
@@ -116,22 +155,16 @@ func (p *Popup) Deliver(ctx context.Context, ev event.Event) error {
 		return err
 	}
 
-	env := append(os.Environ(),
-		"AN_TITLE="+title,
-		"AN_BODY="+body,
-		"AN_APPID="+p.appID,
-	)
-	if runtime.GOOS != "windows" {
-		// WSL interop only forwards variables listed in WSLENV to the
-		// Windows process; add ours (preserving any existing entries).
-		env = append(env, "WSLENV="+strings.Join(wslenvExtras(os.Getenv("WSLENV")), ""))
+	img := ""
+	if p.image {
+		img = p.toastImage(kindSeverity(ev.Kind))
 	}
-	var stderr bytes.Buffer
 	cmd := exec.CommandContext(cctx, p.binary,
 		"-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass",
 		"-Command", toastScript)
-	cmd.Env = env
+	cmd.Env = p.toastEnv(title, body, extra, img)
 	cmd.Dir = p.dir
+	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	if err := cmd.Run(); err != nil {
 		snip := strings.TrimSpace(stderr.String())
@@ -146,15 +179,66 @@ func (p *Popup) Deliver(ctx context.Context, ev event.Event) error {
 	return nil
 }
 
-// wslenvExtras builds the WSLENV suffix that forwards the toast payload
-// variables across the WSL→Win32 boundary, preserving existing entries.
-func wslenvExtras(existing string) []string {
-	const vars = "AN_TITLE:AN_BODY:AN_APPID"
-	if strings.Contains(existing, "AN_TITLE") {
-		return []string{existing}
+// toastEnv builds the child process environment. Under WSL interop only
+// WSLENV-listed variables cross the boundary, so ours are added there.
+func (p *Popup) toastEnv(title, body, extra, img string) []string {
+	env := append(os.Environ(),
+		"AN_TITLE="+title,
+		"AN_BODY="+body,
+		"AN_APPID="+p.appID,
+	)
+	if extra != "" {
+		env = append(env, "AN_EXTRA="+extra)
 	}
+	if img != "" {
+		env = append(env, "AN_IMG="+img)
+	}
+	if runtime.GOOS != "windows" {
+		env = append(env, "WSLENV="+mergeWSLENV(os.Getenv("WSLENV"),
+			"AN_TITLE:AN_BODY:AN_APPID:AN_EXTRA:AN_IMG"))
+	}
+	return env
+}
+
+func mergeWSLENV(existing, extra string) string {
 	if existing == "" {
-		return []string{vars}
+		return extra
 	}
-	return []string{existing + ":" + vars}
+	return existing + ":" + extra
+}
+
+// kindSeverity maps an event kind to the icon color it represents.
+func kindSeverity(k event.Kind) string {
+	switch k {
+	case event.KindAgentBlocked:
+		return "blocked"
+	case event.KindAgentWorking:
+		return "working"
+	case event.KindAgentIdle, event.KindAgentDone:
+		return "waiting"
+	case event.KindSessionDown:
+		return "down"
+	case event.KindTest:
+		return "working"
+	default:
+		return "idle"
+	}
+}
+
+// toastImage renders (and caches) the severity logo as a PNG in the temp
+// directory. Only called on native Windows, where os.TempDir is a
+// Windows-visible path the toast can read.
+func (p *Popup) toastImage(severity string) string {
+	sev := severity
+	p.imgMu.Lock()
+	defer p.imgMu.Unlock()
+	if path, ok := p.imgPath[sev]; ok {
+		return path
+	}
+	path := filepath.Join(os.TempDir(), "agent-notify-toast-"+sev+".png")
+	if err := os.WriteFile(path, icon.PNG(icon.Color(sev), toastImageSize), 0o644); err != nil {
+		return ""
+	}
+	p.imgPath[sev] = path
+	return path
 }

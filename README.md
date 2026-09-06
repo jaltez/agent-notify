@@ -68,8 +68,10 @@ So the same binary covers every placement:
 git clone <this repo> agent-notify && cd agent-notify
 make build            # bin/agent-notify (linux) + bin/agent-notify.exe (windows)
 
-# On Windows: copy bin/agent-notify.exe anywhere and double-click it,
-# or from WSL: ./bin/agent-notify.exe        # tray icon appears on Windows
+# On Windows: copy bin/agent-notify.exe anywhere and double-click it —
+# windowsgui subsystem, so no console window ever appears. From WSL:
+# ./bin/agent-notify.exe                     # tray icon appears on Windows
+# CLI subcommands still print from terminals (console re-attach) and WSL.
 
 ./bin/agent-notify probe     # what can it see, right now?
 ./bin/agent-notify test      # fire a test popup
@@ -144,6 +146,26 @@ contrib/install-systemd.sh            # installs + enables agent-notify.service
 journalctl --user -u agent-notify -f  # follow the log
 ```
 
+## Popups & toast styling
+
+Toasts carry three lines:
+
+1. **Title** — from the render templates (`claude finished`)
+2. **Body** — the agent's terminal title (what it was doing)
+3. **Context** — `project · session — fleet summary`
+   (`api · local/work — 2 working · 1 blocked · 1 waiting`)
+
+`image = true` (default) adds a severity-colored circular logo to the toast
+(native Windows only — toast images need a Windows-visible file path).
+notify-send gets the context line appended to its body instead.
+
+Styling: toast chrome (fonts, colors, position, animations) is rendered by
+the Windows shell and follows your system theme — an app cannot restyle it.
+What an app controls: its identity name/icon (via the AppUserModelID and a
+Start Menu shortcut), the logo image, sounds, expiry, and — with extra COM
+setup — action buttons. agent-notify uses the content, logo, and templates;
+the rest stays native on purpose.
+
 ## Troubleshooting
 
 | Symptom | Fix |
@@ -153,6 +175,7 @@ journalctl --user -u agent-notify -f  # follow the log
 | `popup: unavailable` on WSL | Neither `notify-send` nor `powershell.exe` found in PATH; install one or set `binary` in the sink. |
 | WSL sessions missing from the Windows app | Check `wsl.exe -e sh -c 'ls ~/.config/herdr'` runs and lists sockets; custom herdr locations need `herdr.wsl.extra_path`. |
 | `no display available` | Headless box — use `agent-notify run` / `monitor` instead of the tray. |
+| A console window appears with the exe | You grabbed `agent-notify-console.exe` (the debug build); the normal `agent-notify.exe` never opens one. |
 | Tray icon is a gray dot | That's "all quiet": every visible agent is idle and sessions are reachable. |
 
 ## Development

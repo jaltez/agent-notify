@@ -4,23 +4,26 @@ BINARY := agent-notify
 
 .PHONY: build linux windows windows-gui test fmt vet clean install
 
-build: linux windows
+build: linux windows windows-console
 
 linux:
 	mkdir -p bin
 	go build -trimpath -ldflags "-s -w" -o bin/$(BINARY) .
 
+# windowsgui subsystem: no console window at all (double-click friendly).
+# CLI subcommands still print when launched from a terminal via console
+# attach, and over WSL interop via inherited pipes.
 windows:
 	mkdir -p bin
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-		go build -trimpath -ldflags "-s -w" -o bin/$(BINARY).exe .
+		go build -trimpath -ldflags "-s -w -H windowsgui" -o bin/$(BINARY).exe .
 
-# No console window when launched from Explorer/shortcuts; CLI output is
-# lost, so keep this variant for autostart use only.
-windows-gui:
+# Console-subsystem build for debugging (shows a window when launched
+# outside a terminal).
+windows-console:
 	mkdir -p bin
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-		go build -trimpath -ldflags "-s -w -H windowsgui" -o bin/$(BINARY)-gui.exe .
+		go build -trimpath -ldflags "-s -w" -o bin/$(BINARY)-console.exe .
 
 test:
 	go test ./...

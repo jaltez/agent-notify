@@ -98,6 +98,7 @@ type Sink struct {
 	AppID  string   `toml:"app_id"` // popup: Windows toast AppUserModelID
 	Binary string   `toml:"binary"` // popup: override powershell.exe / notify-send path
 	Expire Duration `toml:"expire"` // popup: notify-send expiration
+	Image  *bool    `toml:"image"`  // popup: severity logo in toasts; default true
 
 	// command
 	Command []string `toml:"command"` // argv template per element
