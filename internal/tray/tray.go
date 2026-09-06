@@ -43,6 +43,7 @@ type Tray struct {
 	eng *engine.Engine
 	pop *sink.Popup // nil = silent icon-only mode
 	log *slog.Logger
+	fly *flyout // detail panel on tray left click (nil where unsupported)
 
 	// touched only from the single refresh goroutine.
 	tree          *menuTree
@@ -79,6 +80,12 @@ func (t *Tray) onReady(ctx context.Context, onTest func()) {
 	systray.SetIcon(icon.Bytes("idle", iconSize))
 	systray.SetTooltip("agent-notify — starting…")
 	t.render(onTest)
+	// Left click opens the flyout panel where supported; right click
+	// keeps the native menu everywhere.
+	t.fly = newFlyout(t.eng)
+	if t.fly != nil {
+		systray.SetOnTapped(t.fly.toggle)
+	}
 	go t.refreshLoop(ctx, onTest)
 }
 
@@ -105,6 +112,9 @@ func (t *Tray) refreshLoop(ctx context.Context, onTest func()) {
 			}
 		}
 		t.render(onTest)
+		if t.fly != nil {
+			t.fly.notify()
+		}
 	}
 }
 
