@@ -1,0 +1,98 @@
+# agent-notify configuration — written by `agent-notify init`.
+# Every key below is optional; the values shown are the defaults.
+# Path precedence: --config flag > $AGENT_NOTIFY_CONFIG > this file.
+
+# Which events reach the sinks. "attention" = agent_idle, agent_done,
+# agent_blocked — an agent stopped working and probably wants a human.
+# Use explicit kinds, "all", or "none" for finer control.
+events = ["attention"]
+
+# Suppress the same (session, pane, kind) event twice within this window.
+# Guards against status flapping.
+cooldown = "500ms"
+
+[render]
+# Go text/templates over the event. Available fields: .Kind .Verb .Time
+# .Source .Host .Session .Agent .From .To .Title .Project .PaneID .Focused
+title = '{{if .Agent}}{{.Agent}}{{else}}{{.Session}}{{end}} {{.Verb}}'
+body  = '{{if .Title}}{{.Title}}{{else if .Project}}{{.Project}}{{else}}{{.Host}}/{{.Session}}{{end}}'
+
+[herdr]
+# Session filters apply to every backend; patterns are shell globs on the
+# session name. Example: include = ["work*"], exclude = ["scratch"]
+include = []
+exclude = []
+
+# Native herdr sockets: ~/.config/herdr/herdr.sock (session "default") and
+# ~/.config/herdr/sessions/<name>/herdr.sock. Auto = on when not running
+# natively on Windows.
+[herdr.local]
+enabled    = "auto"
+poll       = "1s"
+timeout    = "3s"
+socket_dir = ""    # override ~/.config/herdr
+binary     = "herdr"
+
+# herdr.exe sessions — Windows-native when running on Windows, or the
+# Windows side polled from WSL via interop. Auto = on when the binary is
+# found in PATH. "sessions" lists extra named sessions beyond the default.
+[herdr.windows]
+enabled  = "auto"
+sessions = []
+poll     = "2s"
+timeout  = "6s"
+binary   = "auto"
+
+# Sessions inside a WSL distro, polled from a Windows-native process via
+# wsl.exe. Auto = on when wsl.exe is found and we run on Windows. Sessions
+# are auto-discovered; "sessions" restricts discovery to the given names.
+[herdr.wsl]
+enabled    = "auto"
+distro     = ""    # empty = the default distro
+sessions   = []
+extra_path = []    # extra PATH dirs for herdr inside WSL
+poll       = "2s"
+timeout    = "10s"
+rescan     = "30s"
+
+# ---------------------------------------------------------------------------
+# Notifiers. Add one [[sink]] block per notifier; several of the same type
+# are allowed. With no [[sink]] at all you get a single tray notifier with
+# popups enabled (where a tray is available).
+
+# Tray icon: color follows the most severe live state (blocked=red,
+# offline=amber, waiting for you=green, working=blue, idle=gray); click for
+# the per-session/per-agent menu. "popup" toggles attention popups.
+[[sink]]
+type  = "tray"
+popup = true
+
+# Standalone desktop popup without the tray (Windows toast via PowerShell,
+# notify-send elsewhere). expire only applies to notify-send (milliseconds).
+[[sink]]
+type    = "popup"
+# binary = "notify-send"   # force a specific notifier binary
+# expire = "5s"
+# app_id = "..."           # Windows AppUserModelID override
+
+# Ring the terminal bell (BEL) on every delivered event.
+[[sink]]
+type = "bell"
+
+# Run a command per event; each argv element is a Go template.
+# [[sink]]
+# type    = "command"
+# command = ["notify-send", "{{.Agent}} {{.Verb}}", "{{.Title}}"]
+# Or a single shell string: command = ["afplay /System/Library/Sounds/Glass.aiff"], shell = true
+# timeout = "10s"
+
+# POST the event as JSON (or a rendered body_template) to an HTTP endpoint —
+# Discord/Slack/ntfy/Home Assistant webhooks all work through this.
+# [[sink]]
+# type     = "webhook"
+# url      = "https://example.com/hook"
+# method   = "POST"
+# headers  = { Authorization = "Bearer ..." }
+# timeout  = "5s"
+# body_template = '{"text": "{{.Agent}} {{.Verb}} — {{.Title}}"}'
+# content_type  = "application/json"

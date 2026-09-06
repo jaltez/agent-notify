@@ -1,0 +1,12 @@
+[Unit]
+Description=agent-notify — herdr agent event notifier (headless)
+
+[Service]
+Type=simple
+# Adjust the path if agent-notify lives elsewhere.
+ExecStart=%h/.local/bin/agent-notify run
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=default.target
