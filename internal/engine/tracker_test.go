@@ -130,15 +130,17 @@ func TestViewSeverityAndCounts(t *testing.T) {
 		t.Errorf("severity = %q, want down", v.Severity())
 	}
 	v.Sessions[1].Up = true
-	if v.Severity() != "waiting" {
-		t.Errorf("severity = %q, want waiting", v.Severity())
-	}
-	v.Sessions[0].Agents[1].Status = "working"
+	// one working + one waiting: working wins (busy fleet reads as busy)
 	if v.Severity() != "working" {
 		t.Errorf("severity = %q, want working", v.Severity())
 	}
-	if s := v.Summary(); s != "2 working" {
+	if s := v.Summary(); s != "1 working · 1 waiting" {
 		t.Errorf("summary = %q", s)
+	}
+	// green only when every agent stopped and someone waits
+	v.Sessions[0].Agents[0].Status = "done"
+	if v.Severity() != "waiting" {
+		t.Errorf("severity = %q, want waiting", v.Severity())
 	}
 }
 
