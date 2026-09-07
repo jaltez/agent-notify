@@ -30,13 +30,16 @@ const (
 	autoCloseDelay = 8 * time.Second
 	refreshEvery   = time.Second
 
-	flyWidth     = 360
+	flyWidth     = 420
 	flyPad       = 14
 	sectionH     = 24
-	rowH         = 21
+	rowH         = 21 // summary / single-line rows
 	sepAfterSum  = 8
-	agentCol     = 56 // agent-name column (dim)
-	maxFitRows   = 20 // scroll beyond this
+	titleH       = 20 // agent block: line 1 (title)
+	infoH        = 16 // agent block: line 2 (agent · project)
+	blockGap     = 5
+	agentBlockH  = titleH + infoH + blockGap
+	maxFitBlocks = 10 // agent blocks before scrolling
 	wheelStep    = 42 // px per wheel notch
 	flyClassName = "agent-notify-flyout"
 
@@ -143,6 +146,7 @@ type flyout struct {
 	activated bool
 	font      windows.Handle
 	bold      windows.Handle
+	small     windows.Handle
 }
 
 var currentFly *flyout
@@ -239,6 +243,7 @@ func newFlyout(eng *engine.Engine, log *slog.Logger) (*flyout, error) {
 	f := &flyout{eng: eng, log: log}
 	f.font = createFont(-15, 400)
 	f.bold = createFont(-15, 600)
+	f.small = createFont(-12, 400)
 	title, err := windows.UTF16PtrFromString("agent-notify")
 	if err != nil {
 		return nil, err
@@ -319,13 +324,19 @@ func (f *flyout) show() {
 	f.visible = true
 }
 
-// fitHeight is the panel height holding header, summary and maxFitRows.
-func (f *flyout) fitHeight() int32 {
-	return int32(flyPad*2 + sectionH + rowH + sepAfterSum + maxFitRows*rowH)
+// agentBlockH is the painted height of one agent row.
+func (f *flyout) agentBlockH() int32 { return titleH + infoH + blockGap }
+
+// clientHeight is the visible band when scrolling is active.
+func (f *flyout) clientHeight() int32 {
+	return int32(flyPad*2+sectionH+rowH+sepAfterSum) + int32(maxFitBlocks)*f.agentBlockH()
 }
 
+// fitHeight is the panel height holding header, summary and maxFitBlocks.
+func (f *flyout) fitHeight() int32 { return f.clientHeight() }
+
 func (f *flyout) clampScroll() {
-	max := f.contentH - int32(flyPad*2+sectionH+rowH+sepAfterSum+maxFitRows*rowH)
+	max := f.contentH - f.clientHeight()
 	if max < 0 {
 		max = 0
 	}
@@ -398,14 +409,19 @@ func (f *flyout) rows() []flyRow {
 			bold: true,
 		})
 		for _, a := range s.Agents {
-			text := orDash(a.Project)
-			if a.Title != "" {
-				text = a.Title + " · " + text
+			title := a.Title
+			info := a.Name
+			if a.Project != "" {
+				if title == "" {
+					title = a.Project
+				} else {
+					info += " · " + a.Project
+				}
 			}
 			rows = append(rows, flyRow{
 				dot:  colorRef(icon.Color(a.Status)),
-				sub:  a.Name, // the runner, subtly
-				text: text,
+				text: orDash(title), // line 1: what it is doing
+				sub:  info,          // line 2: runner · project, dim
 			})
 		}
 	}
@@ -420,6 +436,9 @@ func (f *flyout) rowsAndHeight() ([]flyRow, int32) {
 		rh := int32(rowH)
 		if r.bold {
 			rh = sectionH
+		}
+		if r.sub != "" {
+			rh = f.agentBlockH()
 		}
 		if i == 1 {
 			rh += sepAfterSum
@@ -479,7 +498,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 
 	clientH := h
 	if f.scrollable {
-		clientH = int32(flyPad*2 + sectionH + rowH + sepAfterSum + maxFitRows*rowH)
+		clientH = f.clientHeight()
 	}
 	y := int32(flyPad) - f.scroll
 	for _, r := range rows {
@@ -487,8 +506,8 @@ func (f *flyout) paint(hwnd windows.HWND) {
 		if r.bold {
 			rh = sectionH
 		}
-		if !r.bold {
-			rh += 2
+		if r.sub != "" {
+			rh = f.agentBlockH() // two-line agent block
 		}
 		if y+rh >= flyPad-2 && y <= clientH { // clip to the visible band
 			x := int32(flyPad)
@@ -497,7 +516,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				brush, _, _ := procCreateSolidBrush.Call(uintptr(r.dot))
 				hold, _, _ := procSelectObject.Call(hdc, brush)
 				d := int32(9)
-				cy := y + rowH/2
+				cy := y + titleH/2 // dot aligns with the title line
 				procEllipse.Call(hdc,
 					uintptr(x), uintptr(cy-d/2),
 					uintptr(x+d), uintptr(cy+d/2+1))
@@ -507,11 +526,12 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				w -= 17
 			}
 			if r.sub != "" {
-				f.drawText(hdc, r.sub, x, y, agentCol, rowH, false, true)
-				x += agentCol
-				w -= agentCol
+				// line 1: title; line 2: runner · project (dim, small)
+				f.drawText(hdc, r.text, x, y, w, titleH, r.bold, r.dim)
+				f.drawTextSmall(hdc, r.sub, x, y+titleH, w, infoH)
+			} else {
+				f.drawText(hdc, r.text, x, y, w, rh, r.bold, r.dim)
 			}
-			f.drawText(hdc, r.text, x, y, w, rowH, r.bold, r.dim)
 		}
 		y += rh
 	}
@@ -533,6 +553,20 @@ func (f *flyout) paint(hwnd windows.HWND) {
 
 func procFrameRectCall(hdc uintptr, rc RECT, brush uintptr) {
 	procFrameRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&rc)), brush)
+}
+
+func (f *flyout) drawTextSmall(hdc uintptr, text string, x, y, w, h int32) {
+	procSelectObject.Call(hdc, uintptr(f.small))
+	procSetTextColor.Call(hdc, uintptr(colorDim))
+	p, _ := windows.UTF16PtrFromString(text)
+	const (
+		dtSingleLine = 0x0020
+		dtVCenter    = 0x0004
+		dtEndEllips  = 0x8000
+	)
+	rc := RECT{x, y, x + w, y + h}
+	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
+		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtVCenter|dtEndEllips))
 }
 
 func (f *flyout) drawText(hdc uintptr, text string, x, y, w, h int32, bold, dim bool) {
