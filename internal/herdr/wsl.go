@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"agent-notify/internal/proc"
+	"github.com/jaltez/agent-notify/internal/proc"
 )
 
 // defaultWSLPath is the base PATH used for herdr calls inside the distro.

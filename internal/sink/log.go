@@ -7,7 +7,7 @@ import (
 	"io"
 	"sync"
 
-	"agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/event"
 )
 
 // Log prints one line per event to a writer — stdout for `monitor`,

@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/event"
 )
 
 func TestDefaultTemplates(t *testing.T) {

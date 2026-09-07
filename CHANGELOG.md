@@ -1,0 +1,17 @@
+# Changelog
+
+## 0.1.0 — 2026-09-07
+
+Initial release.
+
+- Tray icon + flyout panel (Windows) / tray menu tracking live herdr agent
+  state across sessions; attention popups, bell, command, webhook, and log
+  sinks.
+- herdr source with auto-detected backends: native Unix sockets,
+  `herdr.exe` (Windows native or WSL→Win interop), `wsl.exe` (Win→WSL).
+- Event engine: attention set by default (`agent_idle`, `agent_done`,
+  `agent_blocked`), all transitions configurable, per-session filters,
+  cooldown.
+- Single cross-compiling binary (`windowsgui` on Windows, console
+  subcommands intact); TOML config with zero-config defaults; systemd user
+  service contrib.

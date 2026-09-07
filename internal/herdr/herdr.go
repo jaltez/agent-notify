@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"agent-notify/internal/proc"
+	"github.com/jaltez/agent-notify/internal/proc"
 )
 
 // Agent statuses reported by herdr's snapshot API.

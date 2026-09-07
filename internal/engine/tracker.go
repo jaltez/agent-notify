@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"time"
 
-	"agent-notify/internal/event"
-	"agent-notify/internal/herdr"
+	"github.com/jaltez/agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/herdr"
 )
 
 // tracker holds the last known state of one session and turns snapshot

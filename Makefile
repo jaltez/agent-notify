@@ -2,9 +2,20 @@
 
 BINARY := agent-notify
 
-.PHONY: build linux windows windows-gui test fmt vet clean install
+.PHONY: build linux windows windows-console test fmt vet clean install release
 
 build: linux windows windows-console
+
+# Release artifacts: dist/agent-notify-{linux,windows}-amd64 archives + SHA256SUMS
+release: clean build
+	mkdir -p dist
+	cp bin/agent-notify bin/agent-notify.exe bin/agent-notify-console.exe dist/
+	cp README.md LICENSE CHANGELOG.md dist/
+	cd dist && tar czf agent-notify-linux-amd64.tar.gz agent-notify README.md LICENSE CHANGELOG.md
+	cd dist && zip -q agent-notify-windows-amd64.zip agent-notify.exe agent-notify-console.exe README.md LICENSE CHANGELOG.md
+	rm dist/README.md dist/LICENSE dist/CHANGELOG.md
+	cd dist && sha256sum agent-notify* > SHA256SUMS
+	@echo "artifacts in dist/"
 
 linux:
 	mkdir -p bin

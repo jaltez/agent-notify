@@ -9,7 +9,7 @@ import (
 	"log/slog"
 	"time"
 
-	"agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/event"
 )
 
 // Sink consumes events. Deliver should honor ctx cancellation; the Manager

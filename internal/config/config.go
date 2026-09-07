@@ -16,7 +16,7 @@ import (
 
 	"github.com/BurntSushi/toml"
 
-	"agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/event"
 )
 
 // Example is the fully annotated config written by `agent-notify init`.

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"agent-notify/internal/event"
-	"agent-notify/internal/render"
+	"github.com/jaltez/agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/render"
 )
 
 func testRenderer(t *testing.T) *render.Renderer {

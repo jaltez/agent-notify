@@ -16,12 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	"agent-notify/internal/config"
-	"agent-notify/internal/engine"
-	"agent-notify/internal/event"
-	"agent-notify/internal/render"
-	"agent-notify/internal/sink"
-	"agent-notify/internal/tray"
+	"github.com/jaltez/agent-notify/internal/config"
+	"github.com/jaltez/agent-notify/internal/engine"
+	"github.com/jaltez/agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/render"
+	"github.com/jaltez/agent-notify/internal/sink"
+	"github.com/jaltez/agent-notify/internal/tray"
 )
 
 // Version is the agent-notify version.

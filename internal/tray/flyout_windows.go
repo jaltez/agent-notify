@@ -13,8 +13,8 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"agent-notify/internal/engine"
-	"agent-notify/internal/icon"
+	"github.com/jaltez/agent-notify/internal/engine"
+	"github.com/jaltez/agent-notify/internal/icon"
 )
 
 // A small always-on-top flyout panel shown next to the tray on left

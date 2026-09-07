@@ -12,11 +12,11 @@ import (
 	"sync"
 	"time"
 
-	"agent-notify/internal/config"
-	"agent-notify/internal/event"
-	"agent-notify/internal/icon"
-	"agent-notify/internal/proc"
-	"agent-notify/internal/render"
+	"github.com/jaltez/agent-notify/internal/config"
+	"github.com/jaltez/agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/icon"
+	"github.com/jaltez/agent-notify/internal/proc"
+	"github.com/jaltez/agent-notify/internal/render"
 )
 
 // defaultPowerShellAUMID makes Windows attribute toasts to PowerShell,

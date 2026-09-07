@@ -5,7 +5,7 @@ package tray
 import (
 	"log/slog"
 
-	"agent-notify/internal/engine"
+	"github.com/jaltez/agent-notify/internal/engine"
 )
 
 // The flyout panel is a Windows-only UI; elsewhere the tray menu is the

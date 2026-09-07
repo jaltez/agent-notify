@@ -5,7 +5,7 @@ import (
 	"os"
 	"runtime"
 
-	"agent-notify/internal/cli"
+	"github.com/jaltez/agent-notify/internal/cli"
 )
 
 func main() {
