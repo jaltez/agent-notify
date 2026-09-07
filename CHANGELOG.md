@@ -6,7 +6,8 @@ Initial release.
 
 - Tray icon + flyout panel (Windows) / tray menu tracking live herdr agent
   state across sessions; attention popups, bell, command, webhook, and log
-  sinks.
+  sinks. Flyout groups spaces by attention priority, lists every agent
+  (stable order, dim runner column), and scrolls past 20 rows.
 - herdr source with auto-detected backends: native Unix sockets,
   `herdr.exe` (Windows native or WSL→Win interop), `wsl.exe` (Win→WSL).
 - Event engine: attention set by default (`agent_idle`, `agent_done`,

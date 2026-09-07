@@ -35,7 +35,9 @@ const (
 	sectionH     = 24
 	rowH         = 21
 	sepAfterSum  = 8
-	maxRowsSpace = 8
+	agentCol     = 56 // agent-name column (dim)
+	maxFitRows   = 20 // scroll beyond this
+	wheelStep    = 42 // px per wheel notch
 	flyClassName = "agent-notify-flyout"
 
 	wmAppToggle    = 0x8001 // WM_APP+1
@@ -125,6 +127,11 @@ type flyout struct {
 	log     *slog.Logger
 	hwnd    windows.HWND
 	visible bool
+
+	// scroll state (window thread)
+	scroll     int32
+	contentH   int32
+	scrollable bool
 	// diagnostics, touched from the window thread (and flytest)
 	paintPanics int
 	lastPanic   string
@@ -185,6 +192,12 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintp
 	case 0x000F: // WM_PAINT
 		f.paints++
 		f.paint(hwnd)
+		return 0
+	case 0x020A: // WM_MOUSEWHEEL
+		delta := int16(uint32(wParam) >> 16)
+		f.scroll -= int32(delta) / 120 * wheelStep
+		f.clampScroll()
+		procInvalidateRect.Call(uintptr(f.hwnd), 0, 1)
 		return 0
 	case 0x0113: // WM_TIMER
 		switch wParam {
@@ -263,7 +276,14 @@ func (f *flyout) toggle() {
 }
 
 func (f *flyout) show() {
-	_, h := f.rowsAndHeight()
+	_, contentH := f.rowsAndHeight()
+	f.scroll = 0
+	fitH := f.fitHeight()
+	scrollable := contentH > fitH
+	h := contentH
+	if scrollable {
+		h = fitH
+	}
 	var area RECT
 	const spiGetWorkArea = 0x0030
 	if r, _, err := procSystemParametersInfoW.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&area)), 0); r == 0 {
@@ -288,9 +308,33 @@ func (f *flyout) show() {
 	} else {
 		f.activated = false // foreground denied: rely on auto-close/toggle
 	}
-	procSetTimer.Call(uintptr(f.hwnd), timerAutoclose, uintptr(autoCloseDelay.Milliseconds()), 0)
+	f.contentH = contentH
+	f.scrollable = scrollable
+	if !scrollable {
+		// everything fits: auto-close as designed. A scrollable panel
+		// stays open until dismissed.
+		procSetTimer.Call(uintptr(f.hwnd), timerAutoclose, uintptr(autoCloseDelay.Milliseconds()), 0)
+	}
 	procSetTimer.Call(uintptr(f.hwnd), timerRefresh, uintptr(refreshEvery.Milliseconds()), 0)
 	f.visible = true
+}
+
+// fitHeight is the panel height holding header, summary and maxFitRows.
+func (f *flyout) fitHeight() int32 {
+	return int32(flyPad*2 + sectionH + rowH + sepAfterSum + maxFitRows*rowH)
+}
+
+func (f *flyout) clampScroll() {
+	max := f.contentH - int32(flyPad*2+sectionH+rowH+sepAfterSum+maxFitRows*rowH)
+	if max < 0 {
+		max = 0
+	}
+	if f.scroll > max {
+		f.scroll = max
+	}
+	if f.scroll < 0 {
+		f.scroll = 0
+	}
 }
 
 func (f *flyout) hide() {
@@ -327,6 +371,7 @@ func (f *flyout) notify() {
 
 type flyRow struct {
 	dot  uint32 // COLORREF; 0 = no dot
+	sub  string // secondary run (agent name), drawn dim in its own column
 	text string
 	bold bool
 	dim  bool
@@ -352,16 +397,16 @@ func (f *flyout) rows() []flyRow {
 			text: fmt.Sprintf("%s/%s — %d agent%s%s", s.Host, s.Name, len(s.Agents), pluralS(len(s.Agents)), state),
 			bold: true,
 		})
-		for i, a := range s.Agents {
-			if i >= maxRowsSpace {
-				rows = append(rows, flyRow{dot: 0, text: fmt.Sprintf("… and %d more", len(s.Agents)-maxRowsSpace), dim: true})
-				break
-			}
-			text := fmt.Sprintf("%s · %s", a.Name, orDash(a.Project))
+		for _, a := range s.Agents {
+			text := orDash(a.Project)
 			if a.Title != "" {
-				text += " — " + a.Title
+				text = a.Title + " · " + text
 			}
-			rows = append(rows, flyRow{dot: colorRef(icon.Color(a.Status)), text: text})
+			rows = append(rows, flyRow{
+				dot:  colorRef(icon.Color(a.Status)),
+				sub:  a.Name, // the runner, subtly
+				text: text,
+			})
 		}
 	}
 	return rows
@@ -407,6 +452,10 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	defer procEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 
 	rows, h := f.rowsAndHeight()
+	f.contentH = h
+	if f.scrollable {
+		f.clampScroll()
+	}
 	// live refresh can add rows after show(); grow the window to fit
 	if cur := f.rectHeight(); cur != h {
 		const (
@@ -428,30 +477,57 @@ func (f *flyout) paint(hwnd windows.HWND) {
 
 	procSetBkMode.Call(hdc, 1) // TRANSPARENT
 
-	y := int32(flyPad)
+	clientH := h
+	if f.scrollable {
+		clientH = int32(flyPad*2 + sectionH + rowH + sepAfterSum + maxFitRows*rowH)
+	}
+	y := int32(flyPad) - f.scroll
 	for _, r := range rows {
 		rh := int32(rowH)
 		if r.bold {
 			rh = sectionH
 		}
-		if r.dot != 0 {
-			brush, _, _ := procCreateSolidBrush.Call(uintptr(r.dot))
-			hold, _, _ := procSelectObject.Call(hdc, brush)
-			d := int32(9)
-			cy := y + rowH/2
-			procEllipse.Call(hdc,
-				uintptr(flyPad), uintptr(cy-d/2),
-				uintptr(flyPad+d), uintptr(cy+d/2+1))
-			procSelectObject.Call(hdc, hold)
-			procDeleteObject.Call(brush)
-			f.drawText(hdc, r.text, flyPad+17, y, flyWidth-flyPad*2-17, rowH, r.bold, r.dim)
-		} else {
-			f.drawText(hdc, r.text, flyPad, y, flyWidth-flyPad*2, rowH, r.bold, r.dim)
+		if !r.bold {
+			rh += 2
+		}
+		if y+rh >= flyPad-2 && y <= clientH { // clip to the visible band
+			x := int32(flyPad)
+			w := int32(flyWidth - flyPad*2)
+			if r.dot != 0 {
+				brush, _, _ := procCreateSolidBrush.Call(uintptr(r.dot))
+				hold, _, _ := procSelectObject.Call(hdc, brush)
+				d := int32(9)
+				cy := y + rowH/2
+				procEllipse.Call(hdc,
+					uintptr(x), uintptr(cy-d/2),
+					uintptr(x+d), uintptr(cy+d/2+1))
+				procSelectObject.Call(hdc, hold)
+				procDeleteObject.Call(brush)
+				x += 17
+				w -= 17
+			}
+			if r.sub != "" {
+				f.drawText(hdc, r.sub, x, y, agentCol, rowH, false, true)
+				x += agentCol
+				w -= agentCol
+			}
+			f.drawText(hdc, r.text, x, y, w, rowH, r.bold, r.dim)
 		}
 		y += rh
-		if !r.bold {
-			y += 2
+	}
+	// scrollbar thumb when scrollable
+	if f.scrollable && f.contentH > clientH {
+		trackH := clientH - 8
+		thumbH := int32(float64(clientH) * float64(clientH) / float64(f.contentH))
+		if thumbH < 24 {
+			thumbH = 24
 		}
+		maxScroll := f.contentH - clientH
+		thumbY := 4 + int32(float64(trackH-thumbH)*float64(f.scroll)/float64(maxScroll))
+		brush, _, _ := procCreateSolidBrush.Call(uintptr(0x00565656))
+		bar := RECT{flyWidth - 6, thumbY, flyWidth - 3, thumbY + thumbH}
+		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&bar)), brush)
+		procDeleteObject.Call(brush)
 	}
 }
 

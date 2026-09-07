@@ -16,6 +16,7 @@ type tracker struct {
 	up         bool // last fetch succeeded
 
 	agents map[string]herdr.Agent // keyed by PaneID
+	order  []string               // pane keys in last snapshot order (stable UI)
 }
 
 func newTracker(host, name string) *tracker {
@@ -36,9 +37,11 @@ func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event,
 	t.seen, t.up = true, true
 
 	next := make(map[string]herdr.Agent, len(snap.Agents))
+	nextOrder := make([]string, 0, len(snap.Agents))
 	for i, a := range snap.Agents {
 		k := agentKey(a, i)
 		next[k] = a
+		nextOrder = append(nextOrder, k)
 		prev, ok := t.agents[k]
 		switch {
 		case !ok:
@@ -64,6 +67,7 @@ func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event,
 		}
 	}
 	t.agents = next
+	t.order = nextOrder
 	return evs, changed
 }
 

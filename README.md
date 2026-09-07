@@ -24,9 +24,11 @@ went idle, or got blocked — and silent the rest of the time.
 
 - **Tray icon** — color tracks the worst live state:
   🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all stopped, someone waits · ⚪ idle
-- **Left click → flyout panel** — fleet summary, one block per herdr space,
-  one colored row per agent (runner · project · terminal title), refreshed
-  every second. Dismisses on outside click, Escape, or 8 s.
+- **Left click → flyout panel** — fleet summary, spaces grouped by
+  priority (blocked first), every agent listed — status dot, subtle runner
+  name, and what it's doing — refreshed every second. Mouse wheel scrolls
+  past 20 rows; auto-close (8 s) only applies while everything fits, and
+  outside click / Escape always dismiss.
 - **Right click → menu** — same information, native menu (the only UI on
   Linux/macOS).
 - **Popups** — Windows toasts (or notify-send) when an agent wants you:

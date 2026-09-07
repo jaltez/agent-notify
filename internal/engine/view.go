@@ -124,7 +124,8 @@ func (e *Engine) View() View {
 			continue // never observed: don't show phantom sessions
 		}
 		sv := SessionView{Host: t.host, Name: t.name, Up: t.up}
-		for _, a := range t.agents {
+		for _, k := range t.order {
+			a := t.agents[k]
 			sv.Agents = append(sv.Agents, AgentView{
 				Name:    a.Name,
 				Status:  a.Status,
@@ -134,22 +135,47 @@ func (e *Engine) View() View {
 				Focused: a.Focused,
 			})
 		}
-		sort.Slice(sv.Agents, func(i, j int) bool {
-			ai, aj := sv.Agents[i], sv.Agents[j]
-			if ri, rj := statusRank(ai.Status), statusRank(aj.Status); ri != rj {
-				return ri < rj
-			}
-			return ai.Name < aj.Name
-		})
+		// agents keep the source's stable order — no reordering between
+		// refreshes (rows must not cycle in the UI)
 		v.Sessions = append(v.Sessions, sv)
 	}
+	// spaces sorted by attention priority, then name; only a space whose
+	// severity class changes moves position
 	sort.Slice(v.Sessions, func(i, j int) bool {
-		if v.Sessions[i].Host != v.Sessions[j].Host {
-			return v.Sessions[i].Host < v.Sessions[j].Host
+		a, b := v.Sessions[i], v.Sessions[j]
+		if ra, rb := spaceRank(a), spaceRank(b); ra != rb {
+			return ra < rb
 		}
-		return v.Sessions[i].Name < v.Sessions[j].Name
+		if a.Host != b.Host {
+			return a.Host < b.Host
+		}
+		return a.Name < b.Name
 	})
 	return v
+}
+
+// spaceRank orders spaces by attention priority: blocked, offline,
+// waiting (needs you), working, quiet.
+func spaceRank(s SessionView) int {
+	if !s.Up {
+		return 1
+	}
+	r := 4 // idle
+	for _, a := range s.Agents {
+		switch a.Status {
+		case herdr.StatusBlocked:
+			return 0
+		case herdr.StatusIdle, herdr.StatusDone:
+			if r > 2 {
+				r = 2
+			}
+		case herdr.StatusWorking:
+			if r > 3 {
+				r = 3
+			}
+		}
+	}
+	return r
 }
 
 func statusRank(status string) int {
