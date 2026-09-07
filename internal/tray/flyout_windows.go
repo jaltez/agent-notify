@@ -70,6 +70,8 @@ var (
 	procBeginPaint            = user32.NewProc("BeginPaint")
 	procEndPaint              = user32.NewProc("EndPaint")
 	procFillRect              = user32.NewProc("FillRect")
+	procFillRgn               = gdi32.NewProc("FillRgn")
+	procTrackMouseEvent       = user32.NewProc("TrackMouseEvent")
 	procCreateSolidBrush      = gdi32.NewProc("CreateSolidBrush")
 	procDeleteObject          = gdi32.NewProc("DeleteObject")
 	procCreateFontIndirectW   = gdi32.NewProc("CreateFontIndirectW")
@@ -135,6 +137,13 @@ type flyout struct {
 	scroll     int32
 	contentH   int32
 	scrollable bool
+
+	// hover highlight (window thread): index into last-painted rows
+	hover    int32
+	hoverSet bool
+	tracking bool
+	lastRows []flyRow
+	lastGeom []rowGeom
 	// diagnostics, touched from the window thread (and flytest)
 	paintPanics int
 	lastPanic   string
@@ -196,6 +205,17 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintp
 	case 0x000F: // WM_PAINT
 		f.paints++
 		f.paint(hwnd)
+		return 0
+	case 0x0200: // WM_MOUSEMOVE
+		f.trackHover(uintptr(lParam))
+		return 0
+	case 0x02A3: // WM_MOUSELEAVE
+		if f.hoverSet {
+			f.hoverSet = false
+			f.hover = -1
+			procInvalidateRect.Call(uintptr(f.hwnd), 0, 1)
+		}
+		f.tracking = false
 		return 0
 	case 0x020A: // WM_MOUSEWHEEL
 		delta := int16(uint32(wParam) >> 16)
@@ -268,6 +288,41 @@ func newFlyout(eng *engine.Engine, log *slog.Logger) (*flyout, error) {
 			os.Getpid(), f.hwnd, cb, got))
 	}
 	return f, nil
+}
+
+// trackHover hit-tests the mouse position against painted rows and
+// repaints when the hovered row changes. Geoms hold absolute client
+// coordinates as painted (scroll already applied).
+func (f *flyout) trackHover(lParam uintptr) {
+	if !f.visible || len(f.lastGeom) == 0 {
+		return
+	}
+	my := int32(int16(uint32(lParam) >> 16))
+	idx := int32(-1)
+	for i, g := range f.lastGeom {
+		if my >= g.y && my < g.y+g.h {
+			idx = int32(i)
+			break
+		}
+	}
+	if idx != f.hover || !f.hoverSet {
+		f.hover = idx
+		f.hoverSet = true
+		procInvalidateRect.Call(uintptr(f.hwnd), 0, 1)
+	}
+	if !f.tracking {
+		f.tracking = true
+		var tme struct {
+			Size   uint32
+			Flags  uint32
+			Hwnd   windows.HWND
+			HoverT uint32
+		}
+		tme.Size = uint32(unsafe.Sizeof(tme))
+		tme.Flags = 0x00000002 // TME_LEAVE
+		tme.Hwnd = f.hwnd
+		procTrackMouseEvent.Call(uintptr(unsafe.Pointer(&tme)))
+	}
 }
 
 // toggle shows or hides the panel (tray left click).
@@ -378,6 +433,10 @@ func colorRef(c icon.RGB) uint32 {
 // notify asks for a repaint from any goroutine (thread-safe post).
 func (f *flyout) notify() {
 	procPostMessageW.Call(uintptr(f.hwnd), wmAppRefresh, 0, 0)
+}
+
+type rowGeom struct {
+	y, h int32
 }
 
 type flyRow struct {
@@ -500,8 +559,10 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	if f.scrollable {
 		clientH = f.clientHeight()
 	}
+	f.lastRows = rows
+	f.lastGeom = f.lastGeom[:0]
 	y := int32(flyPad) - f.scroll
-	for _, r := range rows {
+	for i, r := range rows {
 		rh := int32(rowH)
 		if r.bold {
 			rh = sectionH
@@ -509,9 +570,29 @@ func (f *flyout) paint(hwnd windows.HWND) {
 		if r.sub != "" {
 			rh = f.agentBlockH() // two-line agent block
 		}
+		f.lastGeom = append(f.lastGeom, rowGeom{y: y + f.scroll, h: rh})
+
+		hovered := f.hoverSet && f.hover == int32(i)
 		if y+rh >= flyPad-2 && y <= clientH { // clip to the visible band
 			x := int32(flyPad)
 			w := int32(flyWidth - flyPad*2)
+
+			if r.sub != "" {
+				// whole-block wash: status color blended over the panel
+				tint := blendColor(r.dot, 0.16, hovered)
+				rgn, _, _ := procCreateRoundRectRgn.Call(
+					uintptr(x-6), uintptr(y+1), uintptr(x+w+6), uintptr(y+rh-2), 8, 8)
+				tbrush, _, _ := procCreateSolidBrush.Call(uintptr(tint))
+				procFillRgn.Call(hdc, rgn, tbrush)
+				procDeleteObject.Call(tbrush)
+				procDeleteObject.Call(rgn)
+			} else if hovered {
+				hb, _, _ := procCreateSolidBrush.Call(uintptr(hoverColor()))
+				hoverRect := RECT{x - 6, y, x + w + 6, y + rh - 2}
+				procFillRect.Call(hdc, uintptr(unsafe.Pointer(&hoverRect)), hb)
+				procDeleteObject.Call(hb)
+			}
+
 			if r.dot != 0 {
 				brush, _, _ := procCreateSolidBrush.Call(uintptr(r.dot))
 				hold, _, _ := procSelectObject.Call(hdc, brush)
@@ -554,6 +635,13 @@ func (f *flyout) paint(hwnd windows.HWND) {
 func procFrameRectCall(hdc uintptr, rc RECT, brush uintptr) {
 	procFrameRect.Call(uintptr(hdc), uintptr(unsafe.Pointer(&rc)), brush)
 }
+
+// a returns the status of the agent backing a row (rows with a sub are
+// agent rows; From/To carry the transition but Status is what the tint
+// mirrors, taken from the dot's own severity via the stored color).
+func a(r flyRow) agentColorRef { return agentColorRef{} }
+
+type agentColorRef struct{}
 
 func (f *flyout) drawTextSmall(hdc uintptr, text string, x, y, w, h int32) {
 	procSelectObject.Call(hdc, uintptr(f.small))
@@ -690,3 +778,23 @@ func wsVisible(hwnd windows.HWND) bool {
 	st, _, _ := procGetWindowLongPtrW.Call(uintptr(hwnd), gwlStyle)
 	return st&0x10000000 != 0 // WS_VISIBLE
 }
+
+// blendColor mixes a COLORREF over the panel background at ratio t; hover
+// lifts the result toward white so the hovered row reads as selected.
+func blendColor(dot uint32, t float64, hover bool) uint32 {
+	const bgR, bgG, bgB = 0x20, 0x20, 0x20 // panel background
+	mix := func(a, b uint8) uint8 {
+		return uint8(float64(a)*(1-t) + float64(b)*t + 0.5)
+	}
+	r := mix(bgR, uint8(dot&0xFF))
+	g := mix(bgG, uint8((dot>>8)&0xFF))
+	b := mix(bgB, uint8((dot>>16)&0xFF))
+	if hover {
+		lift := func(v uint8) uint8 { return uint8(float64(v)*(1-0.10) + 240*0.10 + 0.5) }
+		r, g, b = lift(r), lift(g), lift(b)
+	}
+	return uint32(r) | uint32(g)<<8 | uint32(b)<<16
+}
+
+// hoverColor is the neutral highlight for non-agent rows.
+func hoverColor() uint32 { return 0x00303030 }
