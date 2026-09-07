@@ -7,7 +7,7 @@ import (
 	"runtime"
 	"time"
 
-	"agent-notify/internal/proc"
+	"github.com/jaltez/agent-notify/internal/proc"
 )
 
 // Windows polls herdr.exe sessions: natively on Windows, or the Windows

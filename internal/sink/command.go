@@ -9,8 +9,8 @@ import (
 	"text/template"
 	"time"
 
-	"agent-notify/internal/config"
-	"agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/config"
+	"github.com/jaltez/agent-notify/internal/event"
 )
 
 // defaultCommandTimeout bounds a command sink execution when no explicit

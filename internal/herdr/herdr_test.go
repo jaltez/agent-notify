@@ -3,7 +3,7 @@ package herdr
 import (
 	"testing"
 
-	"agent-notify/internal/proc"
+	"github.com/jaltez/agent-notify/internal/proc"
 )
 
 const fixture = `{"id":"cli:api:snapshot","result":{"snapshot":{

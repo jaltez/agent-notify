@@ -1,4 +1,4 @@
-module agent-notify
+module github.com/jaltez/agent-notify
 
 go 1.26.3
 

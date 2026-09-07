@@ -12,9 +12,9 @@ import (
 	"sync"
 	"time"
 
-	"agent-notify/internal/config"
-	"agent-notify/internal/event"
-	"agent-notify/internal/herdr"
+	"github.com/jaltez/agent-notify/internal/config"
+	"github.com/jaltez/agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/herdr"
 )
 
 // Config parameterizes an Engine.

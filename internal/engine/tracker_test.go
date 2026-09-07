@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"agent-notify/internal/event"
-	"agent-notify/internal/herdr"
+	"github.com/jaltez/agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/herdr"
 )
 
 func agent(status, pane, title string) herdr.Agent {

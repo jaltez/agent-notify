@@ -3,7 +3,7 @@ package tray
 import (
 	"log/slog"
 
-	"agent-notify/internal/engine"
+	"github.com/jaltez/agent-notify/internal/engine"
 )
 
 // NewFlyoutForTest exposes the platform flyout constructor to the CLI

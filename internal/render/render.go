@@ -6,8 +6,8 @@ import (
 	"bytes"
 	"text/template"
 
-	"agent-notify/internal/config"
-	"agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/config"
+	"github.com/jaltez/agent-notify/internal/event"
 )
 
 // Renderer renders events through title and body templates.

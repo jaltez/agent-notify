@@ -1,212 +1,149 @@
 # agent-notify
 
-**Tray notifier for AI coding agents.** A single Go binary that watches
-[herdr](https://herdr.dev) sessions — locally, on the Windows side, or inside
-WSL — and tells you the moment an agent wants you: a live tray icon that
-changes color with agent state, click-to-inspect menus, and desktop popups
-when an agent finishes, blocks, or goes idle.
+**A tray companion for your AI coding agents.** One small Go binary that
+watches your [herdr](https://herdr.dev) sessions — local, Windows-side, and
+inside WSL — and shows at a glance what every agent is doing, popping up only
+when one needs you.
 
 ```
-                    ┌─────────────────────────────────────────────┐
-  herdr sessions    │                agent-notify                 │
-  local  ──sockets──▶                                             │
-  windows ─herdr.exe▶  poll → diff snapshots → events → sinks      │
-  wsl    ──wsl.exe──▶                              │              │
-                    └─────────────────────────────────────────────┘
-                                       ┌────────────┴────────────┐
-                                  tray icon + menu        popups · bell ·
-                                  (color = worst state)   command · webhook
+herdr sessions (local · windows · wsl)
+        │  poll + diff
+        ▼
+   agent-notify ──▶ tray icon (color = fleet state) ──▶ flyout panel on click
+                 └─▶ popups · bell · command · webhook
 ```
 
-## What you get
+[![ci](https://github.com/jaltez/agent-notify/actions/workflows/ci.yml/badge.svg)](https://github.com/jaltez/agent-notify/actions/workflows/ci.yml)
+[![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-- **Tray icon** whose color tracks the fleet state: 🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all agents stopped, someone waits for you · ⚪ all idle.
-- **Left click opens a flyout panel** (Windows): the fleet summary, one
-  block per herdr space with one colored row per agent, refreshed live.
-  It dismisses on click-outside, Escape, or after 8 s.
-- **Right click opens a menu** with the same information (and on Linux/macOS
-  the menu is the detail surface).
-- Toasts carry the space name and fleet summary as context.
-- **Attention popups** on `working → idle/done` and `anything → blocked`
-  (Windows toast or `notify-send`; on by default, configurable).
-- Extra sinks when you want them: terminal bell, arbitrary commands
-  (templated argv), and HTTP webhooks (JSON or templated body — Discord,
-  Slack, ntfy, Home Assistant all work).
-- **Zero config to start**: sessions are auto-discovered; a sensible
-  annotated config is one `agent-notify init` away.
+## Why
 
-## Events
+Agent runners are quiet: you check on them, or you don't. agent-notify makes
+the fleet glanceable and loud exactly when it should be — an agent finished,
+went idle, or got blocked — and silent the rest of the time.
 
-| Kind             | Meaning                              | Default |
-| ---------------- | ------------------------------------ | ------- |
-| `agent_idle`     | `working → idle` (turn finished)     | ✅ on   |
-| `agent_done`     | `working → done` (task finished)     | ✅ on   |
-| `agent_blocked`  | agent became blocked                 | ✅ on   |
-| `agent_working`  | agent started working                | off     |
-| `agent_spawned`  | new agent pane appeared              | off     |
-| `agent_left`     | agent pane disappeared               | off     |
-| `session_down`   | a session stopped responding         | off     |
-| `session_up`     | a session responded again            | off     |
-
-`events = ["attention"]` (the default) selects the three ✅ kinds. Use
-explicit kind names, `"all"`, or `"none"`.
-
-## Session backends (auto-detected)
-
-| Backend   | Discovers                                            | Auto-enabled when                        |
-| --------- | ---------------------------------------------------- | ---------------------------------------- |
-| `local`   | Unix sockets in `~/.config/herdr`                    | running on Linux/WSL/macOS               |
-| `windows` | `herdr.exe` default + configured named sessions      | `herdr.exe` resolves in PATH             |
-| `wsl`     | all sessions inside a WSL distro (via `wsl.exe`)     | running natively on Windows              |
-
-So the same binary covers every placement:
-
-| Where it runs          | What it sees                                |
-| ---------------------- | ------------------------------------------- |
-| Windows (tray app)     | Windows herdr sessions **and** WSL sessions |
-| WSL / Linux            | local sockets **and** the Windows side      |
+- **Tray icon** — color tracks the worst live state:
+  🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all stopped, someone waits · ⚪ idle
+- **Left click → flyout panel** — fleet summary, one block per herdr space,
+  one colored row per agent (runner · project · terminal title), refreshed
+  every second. Dismisses on outside click, Escape, or 8 s.
+- **Right click → menu** — same information, native menu (the only UI on
+  Linux/macOS).
+- **Popups** — Windows toasts (or notify-send) when an agent wants you:
+  `claude finished` / *what it was doing* / `project · space — fleet counts`.
 
 ## Quickstart
 
-```bash
-git clone <this repo> agent-notify && cd agent-notify
-make build            # bin/agent-notify (linux) + bin/agent-notify.exe (windows)
+1. Download `agent-notify.exe` from the
+   [latest release](https://github.com/jaltez/agent-notify/releases) (or
+   [build](#build) it).
+2. Run it. A tray icon appears; sessions are auto-discovered.
+3. Left-click the icon. That's it.
 
-# On Windows: copy bin/agent-notify.exe anywhere and double-click it —
-# windowsgui subsystem, so no console window ever appears. From WSL:
-# ./bin/agent-notify.exe                     # tray icon appears on Windows
-# CLI subcommands still print from terminals (console re-attach) and WSL.
+No config required. `agent-notify probe` shows what it can see;
+`agent-notify test` fires a test popup.
 
-./bin/agent-notify probe     # what can it see, right now?
-./bin/agent-notify test      # fire a test popup
-./bin/agent-notify monitor   # watch the event stream, no notifications
-```
+## Events
 
-Commands: `tray` (default) · `run` (headless) · `monitor [--json] [--all]` ·
-`probe` · `test` · `init [--force]` · `version`.
+| Kind             | Meaning                             | Default |
+| ---------------- | ----------------------------------- | ------- |
+| `agent_idle`     | `working → idle` (turn finished)    | on      |
+| `agent_done`     | `working → done` (task finished)    | on      |
+| `agent_blocked`  | agent became blocked                | on      |
+| `agent_working`  | agent started working               | off     |
+| `agent_spawned`  | new agent pane appeared             | off     |
+| `agent_left`     | agent pane disappeared              | off     |
+| `session_down`   | a session stopped responding        | off     |
+| `session_up`     | a session responded again           | off     |
+
+`events = ["attention"]` (the default) selects the first three. Use explicit
+kinds, `"all"`, or `"none"`.
+
+## Where sessions come from
+
+| Backend   | Discovers                                       | Auto-enabled when                |
+| --------- | ----------------------------------------------- | -------------------------------- |
+| `local`   | Unix sockets in `~/.config/herdr`               | running on Linux/WSL/macOS       |
+| `windows` | `herdr.exe` default + configured sessions       | `herdr.exe` resolves in PATH     |
+| `wsl`     | all sessions inside a WSL distro (via `wsl.exe`)| running natively on Windows      |
+
+So one binary covers every placement — on Windows it sees Windows **and**
+WSL sessions; in WSL it sees local sockets **and** the Windows side.
 
 ## Configuration
 
-No config is required. To customize:
+Zero config works. To customize:
 
 ```bash
-agent-notify init            # writes an annotated config (see below for path)
-agent-notify init            # (again) print/rewrite the path if lost
+agent-notify init     # writes an annotated config, prints its path
 ```
 
-Path precedence: `--config PATH` → `$AGENT_NOTIFY_CONFIG` →
-`~/.config/agent-notify/config.toml` (Linux/WSL) or
-`%APPDATA%\agent-notify\config.toml` (Windows).
-
-A small taste (the full annotated reference is the file `init` writes):
+Path: `--config` → `$AGENT_NOTIFY_CONFIG` →
+`~/.config/agent-notify/config.toml` / `%APPDATA%\agent-notify\config.toml`.
 
 ```toml
-events   = ["attention"]    # or explicit kinds, "all", "none"
+events   = ["attention"]
 cooldown = "500ms"
 
 [herdr]
-include = []                 # session-name globs, e.g. ["work*"]
-exclude = []
-
-[herdr.windows]
-sessions = ["work"]          # extra named herdr.exe sessions to poll
+exclude = ["scratch*"]      # session-name globs
 
 [[sink]]
 type  = "tray"
-popup = true                 # attention popups from the tray
+popup = true                # attention popups from the tray
 
 [[sink]]
-type    = "command"
-command = ["notify-send", "-u", "critical", "{{.Agent}} {{.Verb}}", "{{.Title}}"]
-
-[[sink]]
-type          = "webhook"
-url           = "https://discord.com/api/webhooks/…"
+type     = "webhook"        # Discord/Slack/ntfy/Home Assistant — any HTTP hook
+url      = "https://discord.com/api/webhooks/…"
 body_template = '{"content": "{{.Session}}: {{.Agent}} {{.Verb}} — {{.Title}}"}'
 ```
 
-### Templates
+Notifiers: `tray`, `popup`, `bell`, `command` (templated argv), `webhook`
+(JSON or templated body), `log`. Multiple instances allowed.
 
-Popup titles/bodies, command argv and webhook bodies are Go
-`text/template`s over the event:
+Templates (popup title/body, command argv, webhook bodies) are Go
+`text/template`s over the event: `.Kind .Verb .Time .Source .Host .Session
+.Agent .From .To .Title .Project .PaneID .Focused`.
 
-`.Kind` · `.Verb` · `.Time` · `.Source` · `.Host` · `.Session` · `.Agent` ·
-`.From` · `.To` · `.Title` (terminal title) · `.Project` (cwd basename) ·
-`.PaneID` · `.Focused`
+## Build
 
-Defaults render like `claude finished` / `Refactor auth module`.
-
-## Running at login
-
-**Windows** — put a shortcut to `agent-notify.exe` in `shell:startup`
-(Win+R → `shell:startup`). Build with `make windows-gui` for a binary
-without a console window.
-
-**Linux / WSL (headless, no tray)** — systemd user service:
+Requires [Go](https://go.dev) 1.25+ (any OS; macOS tray needs cgo):
 
 ```bash
-sudo make install PREFIX=/usr/local   # or cp bin/agent-notify ~/.local/bin
-contrib/install-systemd.sh            # installs + enables agent-notify.service
-journalctl --user -u agent-notify -f  # follow the log
+git clone https://github.com/jaltez/agent-notify && cd agent-notify
+make build            # bin/agent-notify + bin/agent-notify.exe (+ console debug build)
+make test
 ```
 
-## Popups & toast styling
+The Windows binary is `windowsgui` — no console window, ever; CLI
+subcommands (`probe`, `test`, `monitor`) still print from terminals.
 
-Toasts carry three lines:
+## Run at login
 
-1. **Title** — from the render templates (`claude finished`)
-2. **Body** — the agent's terminal title (what it was doing)
-3. **Context** — `project · session — fleet summary`
-   (`api · local/work — 2 working · 1 blocked · 1 waiting`)
+- **Windows** — `Win+R` → `shell:startup` → shortcut to `agent-notify.exe`.
+- **Linux/macOS headless** — `agent-notify run` + `contrib/install-systemd.sh`
+  (systemd user service; logs via `journalctl --user -u agent-notify`).
 
-`image = true` (default) adds a severity-colored circular logo to the toast
-(native Windows only — toast images need a Windows-visible file path).
-notify-send gets the context line appended to its body instead.
+## Commands
 
-Styling: toast chrome (fonts, colors, position, animations) is rendered by
-the Windows shell and follows your system theme — an app cannot restyle it.
-What an app controls: its identity name/icon (via the AppUserModelID and a
-Start Menu shortcut), the logo image, sounds, expiry, and — with extra COM
-setup — action buttons. agent-notify uses the content, logo, and templates;
-the rest stays native on purpose.
+`tray` (default) · `run` (headless daemon) · `monitor [--json] [--all]` ·
+`probe` · `test` · `init [--force]` · `flytest` (UI diagnostics) · `version`
 
 ## Troubleshooting
 
 | Symptom | Fix |
 | --- | --- |
-| Rows never appear | The herdr servers aren't running — start `herdr` in the session. `probe` shows per-session errors. |
-| No popups on Windows | Focus Assist / Do Not Disturb queues toasts silently — check the notification center. |
-| `popup: unavailable` on WSL | Neither `notify-send` nor `powershell.exe` found in PATH; install one or set `binary` in the sink. |
-| WSL sessions missing from the Windows app | Check `wsl.exe -e sh -c 'ls ~/.config/herdr'` runs and lists sockets; custom herdr locations need `herdr.wsl.extra_path`. |
-| `no display available` | Headless box — use `agent-notify run` / `monitor` instead of the tray. |
-| A console window appears with the exe | You grabbed `agent-notify-console.exe` (the debug build); the normal `agent-notify.exe` never opens one. |
-| Tray icon is a gray dot | That's "all quiet": every visible agent is idle and sessions are reachable. |
+| No sessions appear | Start the herdr servers; `agent-notify probe` shows per-session errors. |
+| No popups on Windows | Focus Assist / Do Not Disturb silently queues toasts — check the notification center. |
+| `popup: unavailable` | Neither `notify-send` nor `powershell.exe` in PATH; install one or set `binary` in the sink. |
+| WSL sessions missing on Windows | `wsl.exe -e sh -c 'ls ~/.config/herdr'` must list sockets; non-default herdr paths need `herdr.wsl.extra_path`. |
+| `no display available` | Headless box — use `run`/`monitor`, not the tray. |
+| Second tray icon | Not possible — a second instance refuses to start by design. |
 
-## Development
+## Contributing
 
-```bash
-make test      # go test ./...
-make fmt vet
-make build     # linux + windows binaries into bin/
-```
-
-Layout:
-
-```
-main.go                 entry point
-internal/cli            subcommands, config/sink wiring
-internal/config         TOML config, defaults, embedded example
-internal/event          normalized event model
-internal/herdr          herdr source: local / windows / wsl backends
-internal/engine         poll loops, snapshot diffing, filters, view
-internal/sink           tray-adjacent sinks: popup, bell, command, webhook, log
-internal/tray           tray icon rendering (DIB/PNG), menu, refresh loop
-internal/proc           subprocess helpers (interop quirks, UTF-16, WSLENV)
-contrib/                systemd service + installer
-```
-
-New sources (other agent runners) implement the `herdr.Backend`-style
-discover/fetch interface; new notifiers implement `sink.Sink`.
+Issues and PRs welcome. `make test vet fmt` before submitting; keep PRs
+focused.
 
 ## License
 

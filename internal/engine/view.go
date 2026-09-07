@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"agent-notify/internal/herdr"
+	"github.com/jaltez/agent-notify/internal/herdr"
 )
 
 // AgentView is one agent row in a View.

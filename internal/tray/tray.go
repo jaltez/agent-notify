@@ -19,10 +19,10 @@ import (
 
 	"fyne.io/systray"
 
-	"agent-notify/internal/engine"
-	"agent-notify/internal/event"
-	"agent-notify/internal/icon"
-	"agent-notify/internal/sink"
+	"github.com/jaltez/agent-notify/internal/engine"
+	"github.com/jaltez/agent-notify/internal/event"
+	"github.com/jaltez/agent-notify/internal/icon"
+	"github.com/jaltez/agent-notify/internal/sink"
 )
 
 const (

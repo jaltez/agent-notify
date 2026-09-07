@@ -9,7 +9,7 @@ import (
 	"sync"
 	"time"
 
-	"agent-notify/internal/proc"
+	"github.com/jaltez/agent-notify/internal/proc"
 )
 
 // Local polls herdr sessions through their native Unix sockets:
