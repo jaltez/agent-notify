@@ -23,7 +23,8 @@ the fleet glanceable and loud exactly when it should be — an agent finished,
 went idle, or got blocked — and silent the rest of the time.
 
 - **Tray icon** — color tracks the worst live state:
-  🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all stopped, someone waits · ⚪ idle
+  🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all stopped, someone waits · ⚪ idle.
+  Attention states (blocked, waiting) blink until resolved.
 - **Left click → flyout panel** — fleet summary, spaces grouped by
   priority (blocked first), every agent listed — status dot, subtle runner
   name, and what it's doing — refreshed every second. Mouse wheel scrolls

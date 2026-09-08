@@ -1,13 +1,16 @@
 package icon
 
 import (
+	"bytes"
 	"encoding/binary"
+	"image/color"
+	"image/png"
 	"testing"
 )
 
 func TestICOStructure(t *testing.T) {
 	const size = 32
-	data := ICO(Color("blocked"), size)
+	data := icoFrom(circlePixel, Color("blocked"), size)
 	if len(data) == 0 {
 		t.Fatal("empty ICO")
 	}
@@ -80,5 +83,25 @@ func TestSeverityColorsComplete(t *testing.T) {
 	// unknown severity falls back to idle, not empty
 	if len(Bytes("nonsense", 32)) == 0 {
 		t.Error("unknown severity produced no icon")
+	}
+}
+
+func TestHollowRing(t *testing.T) {
+	raw := pngFrom(ringPixel, Color("blocked"), 32)
+	img, err := png.Decode(bytes.NewReader(raw))
+	if err != nil {
+		t.Fatalf("decode hollow PNG: %v", err)
+	}
+	at := func(x, y int) color.NRGBA { return img.At(x, y).(color.NRGBA) }
+	center := at(16, 16)
+	if center.A != 0 {
+		t.Errorf("hollow center should be transparent, got %v", center)
+	}
+	edge := at(16, 3)
+	if edge.A == 0 {
+		t.Error("ring band should be opaque at the top")
+	}
+	if edge.R == 0 && edge.G == 0 && edge.B == 0 {
+		t.Errorf("ring band colorless: %v", edge)
 	}
 }
