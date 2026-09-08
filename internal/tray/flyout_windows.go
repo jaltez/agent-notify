@@ -137,6 +137,7 @@ type flyout struct {
 	// scroll state (window thread)
 	scroll     int32
 	contentH   int32
+	winH       int32
 	scrollable bool
 
 	// hover highlight (window thread): index into last-painted rows
@@ -345,19 +346,22 @@ func (f *flyout) toggle() {
 }
 
 func (f *flyout) show() {
-	_, contentH := f.rowsAndHeight()
-	f.scroll = 0
-	fitH := f.fitHeight()
-	scrollable := contentH > fitH
-	h := contentH
-	if scrollable {
-		h = fitH
-	}
 	var area RECT
 	const spiGetWorkArea = 0x0030
 	if r, _, err := procSystemParametersInfoW.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&area)), 0); r == 0 {
 		f.debugf("flyout show: work area query failed: %v", err)
 	}
+	_, contentH := f.rowsAndHeight()
+	f.scroll = 0
+	// as tall as the content, up to the top of the work area; beyond that
+	// the panel fills the work area and scrolls
+	maxH := area.Bottom - area.Top - 16
+	scrollable := contentH > maxH
+	h := contentH
+	if scrollable {
+		h = maxH
+	}
+	f.winH = h
 	w := int32(flyWidth)
 	x := area.Right - w - 12
 	y := area.Bottom - h - 8
@@ -391,16 +395,8 @@ func (f *flyout) show() {
 // agentBlockH is the painted height of one agent row.
 func (f *flyout) agentBlockH() int32 { return titleH + infoH + blockGap }
 
-// clientHeight is the visible band when scrolling is active.
-func (f *flyout) clientHeight() int32 {
-	return int32(flyPad*2+sectionH+rowH+sepAfterSum) + int32(maxFitBlocks)*f.agentBlockH()
-}
-
-// fitHeight is the panel height holding header, summary and maxFitBlocks.
-func (f *flyout) fitHeight() int32 { return f.clientHeight() }
-
 func (f *flyout) clampScroll() {
-	max := f.contentH - f.clientHeight()
+	max := f.contentH - f.winH
 	if max < 0 {
 		max = 0
 	}
@@ -564,10 +560,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 
 	procSetBkMode.Call(hdc, 1) // TRANSPARENT
 
-	clientH := h
-	if f.scrollable {
-		clientH = f.clientHeight()
-	}
+	clientH := f.winH
 	f.lastRows = rows
 	f.lastGeom = f.lastGeom[:0]
 	y := int32(flyPad) - f.scroll
