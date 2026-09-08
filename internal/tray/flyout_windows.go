@@ -30,18 +30,19 @@ const (
 	autoCloseDelay = 8 * time.Second
 	refreshEvery   = time.Second
 
-	flyWidth     = 420
-	flyPad       = 14
-	sectionH     = 24
-	rowH         = 21 // summary / single-line rows
-	sepAfterSum  = 8
-	titleH       = 20 // agent block: line 1 (title)
-	infoH        = 16 // agent block: line 2 (agent · project)
-	blockGap     = 5
-	agentBlockH  = titleH + infoH + blockGap
-	maxFitBlocks = 10 // agent blocks before scrolling
-	wheelStep    = 42 // px per wheel notch
-	flyClassName = "agent-notify-flyout"
+	flyWidth      = 420
+	flyPad        = 14
+	sectionH      = 24
+	rowH          = 21 // summary / single-line rows
+	sepAfterSum   = 8
+	titleH        = 20 // agent block: line 1 (title)
+	infoH         = 16 // agent block: line 2 (agent · project)
+	blockGap      = 5
+	agentBlockH   = titleH + infoH + blockGap
+	maxFitBlocks  = 10 // agent blocks before scrolling
+	wheelStep     = 42 // px per wheel notch
+	activateGrace = 600 * time.Millisecond
+	flyClassName  = "agent-notify-flyout"
 
 	wmAppToggle    = 0x8001 // WM_APP+1
 	wmAppRefresh   = 0x8002 // WM_APP+2
@@ -144,6 +145,7 @@ type flyout struct {
 	tracking bool
 	lastRows []flyRow
 	lastGeom []rowGeom
+	shownAt  time.Time // grace period before deactivate-dismiss applies
 	// diagnostics, touched from the window thread (and flytest)
 	paintPanics int
 	lastPanic   string
@@ -196,6 +198,13 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintp
 			}
 		} else {
 			f.activated = true
+		}
+		if uint16(wParam) == 0 && time.Since(f.shownAt) < activateGrace {
+			// activation was yanked during startup (another window held
+			// foreground); keep the panel up — a real tray click grants
+			// foreground and click-outside still dismisses afterwards
+			f.activated = false
+			return 0
 		}
 	case 0x0100: // WM_KEYDOWN
 		if wParam == 0x1B { // VK_ESCAPE

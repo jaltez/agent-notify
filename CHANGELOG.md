@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- Tray icon blinks (filled ↔ hollow ring) while the fleet is in an
+  attention state — blocked, or agents stopped and waiting.
+- Flyout: whole agent blocks highlighted with a status-colored wash and
+  hover selection; title-first two-line rows; spaces grouped by priority;
+  mouse-wheel scrolling past 20 agent blocks.
+
 ## 0.1.0 — 2026-09-07
 
 Initial release.

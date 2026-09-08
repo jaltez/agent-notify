@@ -15,6 +15,7 @@ import (
 	"log/slog"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"fyne.io/systray"
@@ -26,9 +27,9 @@ import (
 )
 
 const (
-	iconSize       = 32
-	maxAgentsShown = 15
-	debounce       = 300 * time.Millisecond
+	iconSize   = 32
+	debounce   = 300 * time.Millisecond
+	blinkEvery = 500 * time.Millisecond
 )
 
 // menuTree mirrors the live menu so rows can be updated in place.
@@ -47,8 +48,9 @@ type Tray struct {
 
 	// touched only from the single refresh goroutine.
 	tree          *menuTree
-	lastFP        string // rendered content fingerprint
-	lastStructure string // structural key: sessions + agent counts
+	lastFP        string       // rendered content fingerprint
+	lastStructure string       // structural key: sessions + agent counts
+	curSev        atomic.Value // string: last rendered severity (blink loop reads)
 }
 
 // New builds the tray sink.
@@ -81,6 +83,7 @@ func (t *Tray) onReady(ctx context.Context, onTest func()) {
 	systray.SetTooltip("agent-notify — starting…")
 	t.render(onTest)
 	go t.refreshLoop(ctx, onTest)
+	go t.blinkLoop(ctx)
 }
 
 // InitFlyout creates the flyout panel. It must run on the main OS thread
@@ -128,6 +131,7 @@ func (t *Tray) refreshLoop(ctx context.Context, onTest func()) {
 
 func (t *Tray) render(onTest func()) {
 	v := t.eng.View()
+	t.curSev.Store(v.Severity())
 	fp := fingerprint(v)
 	if fp == t.lastFP {
 		return // nothing view-relevant changed; keep the menu untouched
@@ -186,6 +190,40 @@ func fingerprint(v engine.View) string {
 	return b.String()
 }
 
+// attentionSeverities make the tray icon blink: states that want a human.
+var attentionSeverities = map[string]bool{"blocked": true, "waiting": true}
+
+// blinkLoop alternates the tray icon between the filled severity disc and
+// a hollow ring while the fleet is in an attention state (blocked, or
+// agents stopped and waiting). Steady otherwise. Runs on its own
+// goroutine; systray setters are internally synchronized.
+func (t *Tray) blinkLoop(ctx context.Context) {
+	phase := false
+	tick := time.NewTicker(blinkEvery)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+		}
+		sev, _ := t.curSev.Load().(string)
+		if !attentionSeverities[sev] {
+			if phase { // attention ended: settle back to the steady icon
+				phase = false
+				systray.SetIcon(icon.Bytes(sev, iconSize))
+			}
+			continue
+		}
+		phase = !phase
+		if phase {
+			systray.SetIcon(icon.Bytes(sev, iconSize))
+		} else {
+			systray.SetIcon(icon.BytesHollow(sev, iconSize))
+		}
+	}
+}
+
 // rebuildMenu (re)creates the whole menu. ResetMenu closes removed items'
 // ClickedCh channels, so the per-item handler goroutines exit cleanly.
 // Only structural changes reach this.
@@ -205,12 +243,7 @@ func (t *Tray) rebuildMenu(v engine.View, onTest func()) {
 		hdr := systray.AddMenuItem(sessionLabel(s), "herdr session")
 		hdr.Disable()
 		tree.headers = append(tree.headers, hdr)
-		for i, a := range s.Agents {
-			if i >= maxAgentsShown {
-				more := systray.AddMenuItem(fmt.Sprintf("… and %d more", len(s.Agents)-maxAgentsShown), "")
-				more.Disable()
-				break
-			}
+		for _, a := range s.Agents {
 			item := hdr.AddSubMenuItem(agentLabel(a), a.Title)
 			item.Disable()
 			tree.agents = append(tree.agents, item)
@@ -251,10 +284,7 @@ func (t *Tray) updateMenu(v engine.View) {
 		}
 		// agent rows are flattened in the order the menu was built with
 		// (the engine's View is already sorted)
-		for i, a := range s.Agents {
-			if i >= maxAgentsShown {
-				break
-			}
+		for _, a := range s.Agents {
 			if row < len(t.tree.agents) {
 				t.tree.agents[row].SetTitle(agentLabel(a))
 				t.tree.agents[row].SetTooltip(a.Title)

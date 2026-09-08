@@ -237,7 +237,7 @@ func (p *Popup) toastImage(severity string) string {
 		return path
 	}
 	path := filepath.Join(os.TempDir(), "agent-notify-toast-"+sev+".png")
-	if err := os.WriteFile(path, icon.PNG(icon.Color(sev), toastImageSize), 0o644); err != nil {
+	if err := os.WriteFile(path, icon.RenderPNG(icon.Color(sev), toastImageSize), 0o644); err != nil {
 		return ""
 	}
 	p.imgPath[sev] = path
