@@ -1,12 +1,32 @@
 # Changelog
 
-## Unreleased
+## 0.2.0 — 2026-09-07
 
-- Tray icon blinks (filled ↔ hollow ring) while the fleet is in an
-  attention state — blocked, or agents stopped and waiting.
-- Flyout: whole agent blocks highlighted with a status-colored wash and
-  hover selection; title-first two-line rows; spaces grouped by priority;
-  mouse-wheel scrolling past 20 agent blocks.
+### Added
+
+- **Flyout panel** (Windows): left-click the tray icon for a live status
+  panel — spaces grouped by attention priority, every agent listed
+  (title-first two-line rows, dim runner column, whole-block status wash,
+  hover selection). Grows to the top of the work area; mouse-wheel
+  scrolling when the list outgrows the screen; auto-close (8 s) only while
+  everything fits, outside click / Escape always dismiss.
+- **Attention blink**: the tray icon alternates filled disc ↔ hollow ring
+  while the fleet is blocked or waiting.
+- **Richer toasts**: three lines (title, what it was doing,
+  `project · space — fleet summary`) with a severity-colored logo.
+- Toast logo image on native Windows (`image` sink option, default on).
+- `flytest` UI diagnostics command.
+
+### Changed
+
+- Windows binary is now `windowsgui` — no console window when launched
+  (CLI subcommands re-attach; debug console build still shipped).
+- Tray menu lists all agents (cap removed); flyout sizing grows to the
+  top of the work area before scrolling.
+- Icon rendering refactored to shared pixel functions (filled disc +
+  hollow ring); `CreateFontIndirectW` avoids a `CreateFontW` AV seen on
+  some systems; children spawn with `CREATE_NO_WINDOW` (no console
+  flashes); single-instance tray lock.
 
 ## 0.1.0 — 2026-09-07
 
