@@ -121,6 +121,10 @@ make test
 The Windows binary is `windowsgui` — no console window, ever; CLI
 subcommands (`probe`, `test`, `monitor`) still print from terminals.
 
+> On Windows a **running tray instance locks its exe** — close the old
+> tray (or `taskkill /IM agent-notify.exe /F`) before rebuilding, or the
+> build fails with "Access is denied" and the old binary stays in place.
+
 ## Run at login
 
 - **Windows** — `Win+R` → `shell:startup` → shortcut to `agent-notify.exe`.
