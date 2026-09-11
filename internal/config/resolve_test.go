@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
 	"testing"
 )
 
@@ -17,6 +18,9 @@ func TestResolveFlagAndEnv(t *testing.T) {
 }
 
 func TestResolveDefaultWhenPresent(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("XDG_CONFIG_HOME only steers UserConfigDir on unix")
+	}
 	// Path() joins <UserConfigDir>/agent-notify/config.toml; on Linux
 	// UserConfigDir honors XDG_CONFIG_HOME.
 	dir := t.TempDir()
