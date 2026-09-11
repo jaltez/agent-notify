@@ -18,8 +18,8 @@ func TestResolveFlagAndEnv(t *testing.T) {
 }
 
 func TestResolveDefaultWhenPresent(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("XDG_CONFIG_HOME only steers UserConfigDir on unix")
+	if runtime.GOOS != "linux" {
+		t.Skip("XDG_CONFIG_HOME only steers UserConfigDir on linux")
 	}
 	// Path() joins <UserConfigDir>/agent-notify/config.toml; on Linux
 	// UserConfigDir honors XDG_CONFIG_HOME.
@@ -38,8 +38,8 @@ func TestResolveDefaultWhenPresent(t *testing.T) {
 }
 
 func TestResolveWindowsSharedFallback(t *testing.T) {
-	if os.PathSeparator != '/' {
-		t.Skip("unix-only test")
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only test (WSL fallback path)")
 	}
 	mnt := t.TempDir()
 	// simulate /mnt/c/Users/<user>/AppData/Roaming/agent-notify/config.toml
@@ -63,8 +63,8 @@ func TestResolveWindowsSharedFallback(t *testing.T) {
 }
 
 func TestWindowsSharedPrefersOSDefault(t *testing.T) {
-	if os.PathSeparator != '/' {
-		t.Skip("unix-only test")
+	if runtime.GOOS != "linux" {
+		t.Skip("linux-only test (WSL fallback path)")
 	}
 	mnt := t.TempDir()
 	shared := filepath.Join(mnt, "Users", "u", "AppData", "Roaming", "agent-notify", "config.toml")
