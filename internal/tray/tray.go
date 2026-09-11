@@ -51,12 +51,36 @@ type Tray struct {
 	lastFP        string       // rendered content fingerprint
 	lastStructure string       // structural key: sessions + agent counts
 	curSev        atomic.Value // string: last rendered severity (blink loop reads)
+
+	// self-update integration (nil hooks hide the menu items)
+	onCheckUpdate   func()
+	onUpdateRestart func()
+	updateKnown     bool
+	updateCh        chan struct{} // coalesced signal to re-render the menu
 }
 
 // New builds the tray sink.
 func New(eng *engine.Engine, pop *sink.Popup, log *slog.Logger) *Tray {
-	return &Tray{eng: eng, pop: pop, log: log}
+	return &Tray{eng: eng, pop: pop, log: log, updateCh: make(chan struct{}, 1)}
 }
+
+// SetUpdateHooks wires the self-update menu items (both optional).
+func (t *Tray) SetUpdateHooks(onCheck, onRestart func()) {
+	t.onCheckUpdate = onCheck
+	t.onUpdateRestart = onRestart
+}
+
+// SetUpdateKnown flips the "Update & restart" menu item.
+func (t *Tray) SetUpdateKnown(known bool) {
+	t.updateKnown = known
+	select {
+	case t.updateCh <- struct{}{}:
+	default:
+	}
+}
+
+// QuitApp exits the tray loop (used after a self-update swap).
+func (t *Tray) QuitApp() { systray.Quit() }
 
 // Name implements sink.Sink.
 func (t *Tray) Name() string { return "tray" }
@@ -108,12 +132,15 @@ func (t *Tray) refreshLoop(ctx context.Context, onTest func()) {
 			systray.Quit()
 			return
 		case <-t.eng.StateChange():
+		case <-t.updateCh:
 		}
 		timer := time.NewTimer(debounce)
 	wait:
 		for {
 			select {
 			case <-t.eng.StateChange():
+				timer.Reset(debounce)
+			case <-t.updateCh:
 				timer.Reset(debounce)
 			case <-timer.C:
 				break wait
@@ -140,7 +167,8 @@ func (t *Tray) render(onTest func()) {
 	systray.SetIcon(icon.Bytes(v.Severity(), iconSize))
 	systray.SetTooltip("agent-notify — " + v.Summary())
 
-	if structure := structuralKey(v); structure != t.lastStructure {
+	structure := structuralKey(v) + "|upd:" + strconv.FormatBool(t.updateKnown)
+	if structure != t.lastStructure {
 		t.lastStructure = structure
 		t.rebuildMenu(v, onTest)
 	} else if t.tree != nil {
@@ -260,6 +288,22 @@ func (t *Tray) rebuildMenu(v engine.View, onTest func()) {
 		go func() {
 			for range tm.ClickedCh {
 				onTest()
+			}
+		}()
+	}
+	if t.onCheckUpdate != nil {
+		um := systray.AddMenuItem("Check for updates…", "Look for a newer release on GitHub")
+		go func() {
+			for range um.ClickedCh {
+				t.onCheckUpdate()
+			}
+		}()
+	}
+	if t.updateKnown && t.onUpdateRestart != nil {
+		rm := systray.AddMenuItem("Update && restart", "Download the new release and restart")
+		go func() {
+			for range rm.ClickedCh {
+				t.onUpdateRestart()
 			}
 		}()
 	}

@@ -23,6 +23,8 @@ const (
 
 	// KindTest is synthesized by `agent-notify test` and the tray menu.
 	KindTest Kind = "test"
+	// KindUpdateAvail is synthesized by the background update check.
+	KindUpdateAvail Kind = "update_available"
 )
 
 // Attention is the default event set: the transitions where an agent stopped
@@ -33,7 +35,7 @@ var Attention = []Kind{KindAgentIdle, KindAgentDone, KindAgentBlocked}
 var All = []Kind{
 	KindAgentIdle, KindAgentDone, KindAgentBlocked,
 	KindAgentWorking, KindAgentSpawned, KindAgentLeft,
-	KindSessionDown, KindSessionUp, KindTest,
+	KindSessionDown, KindSessionUp, KindTest, KindUpdateAvail,
 }
 
 var verbs = map[Kind]string{
@@ -46,6 +48,7 @@ var verbs = map[Kind]string{
 	KindSessionDown:  "went offline",
 	KindSessionUp:    "is back online",
 	KindTest:         "test notification",
+	KindUpdateAvail:  "update available",
 }
 
 // Verb returns a short human phrase for the kind, usable in templates.

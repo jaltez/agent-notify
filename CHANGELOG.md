@@ -1,5 +1,18 @@
 # Changelog
 
+## Unreleased
+
+- **Self-update**: `agent-notify update` (checksum-verified download via
+  GitHub releases, safe running-exe swap) plus tray integration — silent
+  check at startup + daily, toast and an "Update & restart" menu item
+  when a release lands.
+- **Install script**: `curl …/install.sh | sh` for Linux/WSL.
+- **goreleaser pipeline**: tag-driven releases with `checksums.txt`;
+  per-build version injection (`-X buildinfo.Version`).
+- **Config**: `config path | edit | validate` commands; WSL automatically
+  falls back to the Windows-side `%APPDATA%` config when no local one
+  exists (one file for both sides).
+
 ## 0.2.0 — 2026-09-07
 
 ### Added

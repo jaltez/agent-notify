@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"time"
 
 	_ "embed"
@@ -202,8 +203,8 @@ func (c Config) Validate() error {
 	return nil
 }
 
-// Path resolves the config file path: explicit flag, environment, then the
-// user config dir. It returns "" when nothing can be resolved.
+// Path resolves where `init` should write: explicit flag, environment,
+// then the OS user config dir. It returns "" when nothing can be resolved.
 func Path(flagValue string) string {
 	if flagValue != "" {
 		return flagValue
@@ -215,6 +216,60 @@ func Path(flagValue string) string {
 		return filepath.Join(dir, "agent-notify", "config.toml")
 	}
 	return ""
+}
+
+// mntC is the WSL mount point of the Windows drive (overridable in tests).
+var mntC = "/mnt/c"
+
+// Resolve picks the config to LOAD: explicit flag, environment, the OS
+// default, and — on WSL — the Windows-side %APPDATA% config when it
+// exists, so one file can drive both the Windows tray and a WSL daemon.
+// The second return says which rule matched ("flag", "env", "default",
+// "windows-shared", "").
+func Resolve(flagValue string) (string, string) {
+	if flagValue != "" {
+		return flagValue, "flag"
+	}
+	if env := os.Getenv("AGENT_NOTIFY_CONFIG"); env != "" {
+		return env, "env"
+	}
+	def := Path("")
+	if def != "" && fileExists(def) {
+		return def, "default"
+	}
+	if runtime.GOOS == "linux" {
+		if p := windowsSharedConfig(); p != "" {
+			return p, "windows-shared"
+		}
+	}
+	if def != "" {
+		return def, "default" // exists or not: the normal location
+	}
+	return "", ""
+}
+
+// windowsSharedConfig finds a Windows-side config under /mnt/c, if any.
+func windowsSharedConfig() string {
+	users := filepath.Join(mntC, "Users")
+	entries, err := os.ReadDir(users)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(users, e.Name(), "AppData", "Roaming", "agent-notify", "config.toml")
+		if fileExists(p) {
+			return p
+		}
+	}
+	return ""
+}
+
+func fileExists(path string) bool {
+	fi, err := os.Stat(path)
+	return err == nil && !fi.IsDir()
 }
 
 func validEnabled(v string) bool {

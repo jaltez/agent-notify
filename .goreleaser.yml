@@ -1,0 +1,67 @@
+version: 2
+
+project_name: agent-notify
+
+before:
+  hooks:
+    - go mod tidy
+
+builds:
+  - id: linux
+    main: .
+    binary: agent-notify
+    env: [CGO_ENABLED=0]
+    goos: [linux]
+    goarch: [amd64]
+    ldflags:
+      - -s -w -X github.com/jaltez/agent-notify/internal/buildinfo.Version={{.Version}}
+
+  - id: windows
+    main: .
+    binary: agent-notify
+    env: [CGO_ENABLED=0]
+    goos: [windows]
+    goarch: [amd64]
+    ldflags:
+      - -s -w -H windowsgui -X github.com/jaltez/agent-notify/internal/buildinfo.Version={{.Version}}
+
+  - id: windows-console
+    main: .
+    binary: agent-notify-console
+    env: [CGO_ENABLED=0]
+    goos: [windows]
+    goarch: [amd64]
+    ldflags:
+      - -s -w -X github.com/jaltez/agent-notify/internal/buildinfo.Version={{.Version}}
+
+archives:
+  - id: linux
+    ids: [linux]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md, LICENSE, CHANGELOG.md]
+
+  - id: windows
+    ids: [windows, windows-console]
+    formats: [zip]
+    name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md, LICENSE, CHANGELOG.md]
+
+checksum:
+  name_template: "checksums.txt"
+  algorithm: sha256
+
+# The single checksums.txt file is what `agent-notify update` verifies
+# against (go-selfupdate ChecksumValidator) and what install.sh checks.
+
+release:
+  draft: false
+  prerelease: auto
+
+changelog:
+  sort: asc
+  filters:
+    exclude:
+      - "^docs:"
+      - "^test:"
+      - "^chore:"
