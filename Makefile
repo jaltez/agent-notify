@@ -1,25 +1,22 @@
 .POSIX:
 
 BINARY := agent-notify
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+PKG := github.com/jaltez/agent-notify/internal/buildinfo
+LDFLAGS = -s -w -X $(PKG).Version=$(VERSION)
 
 .PHONY: build linux windows windows-console test fmt vet clean install release
 
 build: linux windows windows-console
 
-# Release artifacts: dist/agent-notify-{linux,windows}-amd64 archives + SHA256SUMS
-release: clean build
-	mkdir -p dist
-	cp bin/agent-notify bin/agent-notify.exe bin/agent-notify-console.exe dist/
-	cp README.md LICENSE CHANGELOG.md dist/
-	cd dist && tar czf agent-notify-linux-amd64.tar.gz agent-notify README.md LICENSE CHANGELOG.md
-	cd dist && zip -q agent-notify-windows-amd64.zip agent-notify.exe agent-notify-console.exe README.md LICENSE CHANGELOG.md
-	rm dist/README.md dist/LICENSE dist/CHANGELOG.md
-	cd dist && sha256sum agent-notify* > SHA256SUMS
-	@echo "artifacts in dist/"
+# Local snapshot release (production releases come from the tag workflow
+# running goreleaser; see .goreleaser.yml).
+release:
+	goreleaser release --snapshot --clean
 
 linux:
 	mkdir -p bin
-	go build -trimpath -ldflags "-s -w" -o bin/$(BINARY) .
+	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) .
 
 # windowsgui subsystem: no console window at all (double-click friendly).
 # CLI subcommands still print when launched from a terminal via console
@@ -27,14 +24,14 @@ linux:
 windows:
 	mkdir -p bin
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-		go build -trimpath -ldflags "-s -w -H windowsgui" -o bin/$(BINARY).exe .
+		go build -trimpath -ldflags "$(LDFLAGS) -H windowsgui" -o bin/$(BINARY).exe .
 
 # Console-subsystem build for debugging (shows a window when launched
 # outside a terminal).
 windows-console:
 	mkdir -p bin
 	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-		go build -trimpath -ldflags "-s -w" -o bin/$(BINARY)-console.exe .
+		go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-console.exe .
 
 test:
 	go test ./...

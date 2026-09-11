@@ -37,14 +37,30 @@ went idle, or got blocked — and silent the rest of the time.
 
 ## Quickstart
 
-1. Download `agent-notify.exe` from the
-   [latest release](https://github.com/jaltez/agent-notify/releases) (or
-   [build](#build) it).
-2. Run it. A tray icon appears; sessions are auto-discovered.
-3. Left-click the icon. That's it.
+**Windows** — download `agent-notify_windows_amd64.zip` from the
+[latest release](https://github.com/jaltez/agent-notify/releases), unzip,
+run `agent-notify.exe`. (Or
+`winget install jaltez.agent-notify` once the winget manifest lands.)
 
-No config required. `agent-notify probe` shows what it can see;
-`agent-notify test` fires a test popup.
+**Linux / WSL** —
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.sh | sh
+```
+
+Or `go install github.com/jaltez/agent-notify@latest`.
+
+Then: run it. A tray icon appears; sessions are auto-discovered.
+Left-click the icon for the panel. No config required — `agent-notify
+probe` shows what it can see, `agent-notify test` fires a test popup.
+
+## Updates
+
+- The tray checks GitHub releases at startup and daily; when one lands you
+  get a toast and a **tray menu → Update & restart** item (download is
+  checksum-verified; the swap renames the running exe safely on Windows).
+- CLI: `agent-notify update` applies immediately, `--check` only looks.
+- Package managers update their own way (winget; install.sh re-run).
 
 ## Events
 
@@ -83,6 +99,10 @@ agent-notify init     # writes an annotated config, prints its path
 
 Path: `--config` → `$AGENT_NOTIFY_CONFIG` →
 `~/.config/agent-notify/config.toml` / `%APPDATA%\agent-notify\config.toml`.
+On WSL, when no local config exists, agent-notify automatically loads the
+**Windows-side** `%APPDATA%` config — one file drives both the Windows
+tray and a WSL daemon (`agent-notify config path` shows the resolution).
+`agent-notify config edit | validate` manage it.
 
 ```toml
 events   = ["attention"]

@@ -9,23 +9,27 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
+	"github.com/jaltez/agent-notify/internal/buildinfo"
 	"github.com/jaltez/agent-notify/internal/config"
 	"github.com/jaltez/agent-notify/internal/engine"
 	"github.com/jaltez/agent-notify/internal/event"
 	"github.com/jaltez/agent-notify/internal/render"
 	"github.com/jaltez/agent-notify/internal/sink"
 	"github.com/jaltez/agent-notify/internal/tray"
+	"github.com/jaltez/agent-notify/internal/update"
 )
 
-// Version is the agent-notify version.
-const Version = "0.2.0"
+// version is sourced from buildinfo (injected at build time).
+func version() string { return buildinfo.Version }
 
 const usage = `agent-notify — tray notifier for AI coding agents (herdr today)
 
@@ -39,6 +43,8 @@ Commands:
   probe       one pass: show sessions, agents and sink availability
   test        send a test notification through every configured sink
   init        write an annotated example config
+  config      path | edit | validate the configuration
+  update      self-update from GitHub releases (--check to only look)
   version     print version information
   flytest     diagnostics: drive the flyout show/hide cycle
   help        show this help
@@ -105,6 +111,10 @@ subcommand:
 		return cmdVersion(stdout)
 	case "flytest":
 		return cmdFlytest(configPath, stdout, log)
+	case "update":
+		return cmdUpdate(rest, stdout, log)
+	case "config":
+		return cmdConfig(configPath, rest, stdout, log)
 	default:
 		fmt.Fprintf(stderr, "unknown command %q\n\n%s", cmd, usage)
 		return 2
@@ -121,14 +131,17 @@ func newLogger(w io.Writer, verbose bool) *slog.Logger {
 
 // loadConfig resolves and loads the config, logging hints on the way.
 func loadConfig(path string, log *slog.Logger) config.Config {
-	path = config.Path(path)
-	if path == "" || !fileExists(path) {
-		if path != "" {
-			log.Info("config not found; using defaults", "path", path)
-		} else {
-			log.Info("using built-in defaults (no config file)")
-		}
+	path, source := config.Resolve(path)
+	if path == "" {
+		log.Info("using built-in defaults (no config file)")
 		return config.Default()
+	}
+	if !fileExists(path) {
+		log.Info("config not found; using defaults", "path", path)
+		return config.Default()
+	}
+	if source == "windows-shared" {
+		log.Info("using Windows-side config (WSL auto-share)", "path", path)
 	}
 	cfg, warnings, err := config.Load(path)
 	for _, w := range warnings {
@@ -299,7 +312,7 @@ func cmdTray(configPath string, log *slog.Logger, stderr io.Writer) int {
 	go func() {
 		mgr.Run(ctx)
 	}()
-	log.Info("agent-notify tray started", "version", Version, "backends", strings.Join(eng.Backends(), ","), "sinks", strings.Join(mgr.Names(), ","))
+	log.Info("agent-notify tray started", "version", version(), "backends", strings.Join(eng.Backends(), ","), "sinks", strings.Join(mgr.Names(), ","))
 
 	var traySink *tray.Tray
 	for _, s := range sinks {
@@ -308,6 +321,10 @@ func cmdTray(configPath string, log *slog.Logger, stderr io.Writer) int {
 			break
 		}
 	}
+	// Self-update lifecycle: silent check at startup + daily; toast and a
+	// menu item when a release lands; one-click apply + restart.
+	wireUpdates(ctx, traySink, mgr, log)
+
 	// The flyout window must be created on this (locked, main) thread
 	// before the message loop starts pumping.
 	traySink.InitFlyout()
@@ -315,6 +332,109 @@ func cmdTray(configPath string, log *slog.Logger, stderr io.Writer) int {
 		mgr.Deliver(testEvent())
 	})
 	return 0
+}
+
+// wireUpdates wires the tray's update menu to the GitHub release check.
+func wireUpdates(ctx context.Context, traySink *tray.Tray, mgr *sink.Manager, log *slog.Logger) {
+	var (
+		mu      sync.Mutex
+		checker *update.Checker
+		status  update.Status
+	)
+
+	checkOnce := func(quiet bool) {
+		mu.Lock()
+		if checker == nil {
+			c, err := update.New()
+			if err != nil {
+				mu.Unlock()
+				log.Warn("updater unavailable", "error", err)
+				return
+			}
+			checker = c
+		}
+		c := checker
+		mu.Unlock()
+
+		st, err := c.Check(ctx)
+		if err != nil {
+			log.Warn("update check failed", "error", err)
+			return
+		}
+		mu.Lock()
+		status = st
+		mu.Unlock()
+		log.Info("update check", "result", st.Describe())
+		if st.UpdateAvail {
+			traySink.SetUpdateKnown(true)
+			if !quiet {
+				mgr.Deliver(updateEvent(st.Latest))
+			}
+		} else if !quiet {
+			mgr.Deliver(statusToastEvent(st))
+		}
+	}
+
+	traySink.SetUpdateHooks(
+		func() { go checkOnce(false) },
+		func() {
+			go func() {
+				mu.Lock()
+				c, st := checker, status
+				mu.Unlock()
+				if c == nil || st.Release == nil {
+					return
+				}
+				if err := c.Apply(ctx, st.Release); err != nil {
+					log.Error("self-update failed", "error", err)
+					return
+				}
+				log.Info("self-update applied; restarting", "version", st.Latest)
+				if err := update.RestartSelf(); err != nil {
+					log.Error("restart failed; start agent-notify again", "error", err)
+				}
+				traySink.QuitApp()
+			}()
+		},
+	)
+
+	go func() {
+		select {
+		case <-time.After(30 * time.Second):
+			checkOnce(true)
+		case <-ctx.Done():
+			return
+		}
+		tick := time.NewTicker(24 * time.Hour)
+		defer tick.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-tick.C:
+				checkOnce(true)
+			}
+		}
+	}()
+}
+
+func updateEvent(latest string) event.Event {
+	return event.Event{
+		Kind:    event.KindUpdateAvail,
+		Time:    time.Now(),
+		Session: "agent-notify",
+		Title:   "v" + latest + " available — tray menu → Update & restart",
+	}
+}
+
+func statusToastEvent(st update.Status) event.Event {
+	return event.Event{
+		Kind:    event.KindTest,
+		Time:    time.Now(),
+		Session: "agent-notify",
+		Agent:   "update check",
+		Title:   st.Describe(),
+	}
 }
 
 func cmdRun(configPath string, log *slog.Logger) int {
@@ -338,7 +458,7 @@ func cmdRun(configPath string, log *slog.Logger) int {
 	}
 	go eng.Run(ctx)
 	go mgr.Run(ctx)
-	log.Info("agent-notify running", "version", Version, "backends", strings.Join(eng.Backends(), ","), "sinks", strings.Join(mgr.Names(), ","))
+	log.Info("agent-notify running", "version", version(), "backends", strings.Join(eng.Backends(), ","), "sinks", strings.Join(mgr.Names(), ","))
 	<-ctx.Done()
 	return 0
 }
@@ -521,7 +641,101 @@ func cmdFlytest(configPath string, stdout io.Writer, log *slog.Logger) int {
 }
 
 func cmdVersion(stdout io.Writer) int {
-	fmt.Fprintf(stdout, "agent-notify %s (%s/%s, %s)\n", Version, runtime.GOOS, runtime.GOARCH, runtime.Version())
+	fmt.Fprintf(stdout, "agent-notify %s (%s/%s, %s)\n", version(), runtime.GOOS, runtime.GOARCH, runtime.Version())
+	return 0
+}
+
+// cmdUpdate checks GitHub releases and optionally self-updates.
+func cmdUpdate(args []string, stdout io.Writer, log *slog.Logger) int {
+	fs := flag.NewFlagSet("update", flag.ContinueOnError)
+	checkOnly := fs.Bool("check", false, "only report the latest release")
+	if err := fs.Parse(args); err != nil {
+		return 2
+	}
+	checker, err := update.New()
+	if err != nil {
+		fmt.Fprintln(stdout, "updater:", err)
+		return 1
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	st, err := checker.Check(ctx)
+	if err != nil {
+		fmt.Fprintf(stdout, "update check failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintln(stdout, st.Describe())
+	if !st.UpdateAvail || *checkOnly {
+		return 0
+	}
+	if err := checker.Apply(ctx, st.Release); err != nil {
+		fmt.Fprintf(stdout, "update failed: %v\n", err)
+		return 1
+	}
+	fmt.Fprintf(stdout, "updated to %s — restart agent-notify to apply\n", st.Latest)
+	return 0
+}
+
+// cmdConfig implements `config path|edit|validate`.
+func cmdConfig(configPath string, args []string, stdout io.Writer, log *slog.Logger) int {
+	sub := "path"
+	if len(args) > 0 {
+		sub = args[0]
+	}
+	switch sub {
+	case "path":
+		p, source := config.Resolve(configPath)
+		if p == "" {
+			fmt.Fprintln(stdout, "no config path resolvable")
+			return 1
+		}
+		fmt.Fprintf(stdout, "%s (source: %s)\n", p, source)
+	case "edit":
+		p := config.Path(configPath)
+		if p == "" {
+			fmt.Fprintln(stdout, "cannot determine a config path")
+			return 1
+		}
+		if !fileExists(p) {
+			fmt.Fprintf(stdout, "%s does not exist; run `agent-notify init` first\n", p)
+			return 1
+		}
+		editor := os.Getenv("VISUAL")
+		if editor == "" {
+			editor = os.Getenv("EDITOR")
+		}
+		if editor == "" {
+			if runtime.GOOS == "windows" {
+				editor = "notepad.exe"
+			} else {
+				editor = "vi"
+			}
+		}
+		cmd := exec.Command(editor, p)
+		cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+		if err := cmd.Run(); err != nil {
+			fmt.Fprintf(stdout, "editor: %v\n", err)
+			return 1
+		}
+	case "validate":
+		p, _ := config.Resolve(configPath)
+		if p == "" || !fileExists(p) {
+			fmt.Fprintln(stdout, "config: none found (defaults in effect) — ok")
+			return 0
+		}
+		if _, warnings, err := config.Load(p); err != nil {
+			fmt.Fprintf(stdout, "INVALID: %v\n", err)
+			return 1
+		} else if len(warnings) > 0 {
+			for _, w := range warnings {
+				fmt.Fprintf(stdout, "warning: %s\n", w)
+			}
+		}
+		fmt.Fprintf(stdout, "%s — ok\n", p)
+	default:
+		fmt.Fprintf(stdout, "unknown config subcommand %q (path|edit|validate)\n", sub)
+		return 2
+	}
 	return 0
 }
 
