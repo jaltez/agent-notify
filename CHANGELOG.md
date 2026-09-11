@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0 — 2026-09-11
 
 - **Self-update**: `agent-notify update` (checksum-verified download via
   GitHub releases, safe running-exe swap) plus tray integration — silent
