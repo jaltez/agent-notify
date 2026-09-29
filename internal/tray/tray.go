@@ -30,6 +30,10 @@ const (
 	iconSize   = 32
 	debounce   = 300 * time.Millisecond
 	blinkEvery = 500 * time.Millisecond
+	// waitingBlinkWindow is how long the icon blinks after the fleet
+	// enters waiting: long enough to catch the eye from afar, short
+	// enough that an idle fleet settles instead of crying wolf.
+	waitingBlinkWindow = 2 * time.Minute
 )
 
 // menuTree mirrors the live menu so rows can be updated in place.
@@ -51,12 +55,16 @@ type Tray struct {
 	lastFP        string       // rendered content fingerprint
 	lastStructure string       // structural key: sessions + agent counts
 	curSev        atomic.Value // string: last rendered severity (blink loop reads)
+	waitBlinkTill atomic.Value // time.Time: waiting-blink deadline; zero = solid
 
 	// self-update integration (nil hooks hide the menu items)
 	onCheckUpdate   func()
 	onUpdateRestart func()
 	updateKnown     bool
 	updateCh        chan struct{} // coalesced signal to re-render the menu
+
+	// first-run onboarding (nil hook hides the menu item)
+	onSetup func()
 }
 
 // New builds the tray sink.
@@ -77,6 +85,11 @@ func (t *Tray) SetUpdateKnown(known bool) {
 	case t.updateCh <- struct{}{}:
 	default:
 	}
+}
+
+// SetSetupHook shows the "Set up…" menu item (first-run onboarding).
+func (t *Tray) SetSetupHook(onSetup func()) {
+	t.onSetup = onSetup
 }
 
 // QuitApp exits the tray loop (used after a self-update swap).
@@ -158,6 +171,7 @@ func (t *Tray) refreshLoop(ctx context.Context, onTest func()) {
 
 func (t *Tray) render(onTest func()) {
 	v := t.eng.View()
+	t.armWaitBlink(v.Severity())
 	t.curSev.Store(v.Severity())
 	fp := fingerprint(v)
 	if fp == t.lastFP {
@@ -167,7 +181,8 @@ func (t *Tray) render(onTest func()) {
 	systray.SetIcon(icon.Bytes(v.Severity(), iconSize))
 	systray.SetTooltip("agent-notify — " + v.Summary())
 
-	structure := structuralKey(v) + "|upd:" + strconv.FormatBool(t.updateKnown)
+	structure := structuralKey(v) + "|upd:" + strconv.FormatBool(t.updateKnown) +
+		"|setup:" + strconv.FormatBool(t.onSetup != nil)
 	if structure != t.lastStructure {
 		t.lastStructure = structure
 		t.rebuildMenu(v, onTest)
@@ -218,13 +233,41 @@ func fingerprint(v engine.View) string {
 	return b.String()
 }
 
-// attentionSeverities make the tray icon blink: states that want a human.
-var attentionSeverities = map[string]bool{"blocked": true, "waiting": true}
+// armWaitBlink times the waiting-blink window. Entering waiting from a
+// different state arms a short blink — the fleet just stopped and wants a
+// glance, the same moment the popup fires. Starting directly in waiting
+// (agents idle before the tray launched) never arms: an idle fleet is
+// the resting state, not an alarm.
+func (t *Tray) armWaitBlink(sev string) {
+	prev, hadPrev := t.curSev.Load().(string)
+	switch {
+	case sev == "waiting" && hadPrev && prev != "waiting":
+		t.waitBlinkTill.Store(time.Now().Add(waitingBlinkWindow))
+	case sev != "waiting":
+		t.waitBlinkTill.Store(time.Time{})
+	}
+	// still waiting: keep the running window (staggered finishers don't
+	// extend it; each got its popup the moment it dropped)
+}
+
+// shouldBlink reports whether the icon should be in its attention phase
+// at now. Blocked blinks until resolved — a stuck agent cannot unstick
+// itself. Waiting blinks only within its window after the fleet entered
+// the state.
+func shouldBlink(sev string, waitTill, now time.Time) bool {
+	switch sev {
+	case "blocked":
+		return true
+	case "waiting":
+		return !waitTill.IsZero() && now.Before(waitTill)
+	}
+	return false
+}
 
 // blinkLoop alternates the tray icon between the filled severity disc and
-// a hollow ring while the fleet is in an attention state (blocked, or
-// agents stopped and waiting). Steady otherwise. Runs on its own
-// goroutine; systray setters are internally synchronized.
+// a hollow ring while the fleet wants attention (see shouldBlink).
+// Steady otherwise. Runs on its own goroutine; systray setters are
+// internally synchronized.
 func (t *Tray) blinkLoop(ctx context.Context) {
 	phase := false
 	tick := time.NewTicker(blinkEvery)
@@ -236,7 +279,8 @@ func (t *Tray) blinkLoop(ctx context.Context) {
 		case <-tick.C:
 		}
 		sev, _ := t.curSev.Load().(string)
-		if !attentionSeverities[sev] {
+		waitTill, _ := t.waitBlinkTill.Load().(time.Time)
+		if !shouldBlink(sev, waitTill, time.Now()) {
 			if phase { // attention ended: settle back to the steady icon
 				phase = false
 				systray.SetIcon(icon.Bytes(sev, iconSize))
@@ -283,6 +327,14 @@ func (t *Tray) rebuildMenu(v engine.View, onTest func()) {
 	}
 
 	systray.AddSeparator()
+	if t.onSetup != nil {
+		sm := systray.AddMenuItem("Set up agent-notify…", "Install to the standard location, autostart, updates")
+		go func() {
+			for range sm.ClickedCh {
+				t.onSetup()
+			}
+		}()
+	}
 	if onTest != nil {
 		tm := systray.AddMenuItem("Test notification", "Send a test event through the sinks")
 		go func() {

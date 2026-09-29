@@ -1,0 +1,15 @@
+# agent-notify systemd user unit, rendered by `agent-notify setup --service`
+# (ExecStart is the installed binary). Keep in sync with contrib/agent-notify.service.
+[Unit]
+Description=agent-notify — herdr agent event notifier (headless)
+
+[Service]
+Type=simple
+ExecStart=__BIN__ run
+# always (not on-failure): the daemon exits cleanly on self-update and
+# must come back on the new binary.
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=default.target
