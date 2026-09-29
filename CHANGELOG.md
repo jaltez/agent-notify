@@ -1,5 +1,52 @@
 # Changelog
 
+## Unreleased
+
+- **Tray blink fix**: an idle fleet no longer blinks green forever.
+  Entering the waiting state now blinks for 2 minutes (the moment the
+  popup fires), then settles into a steady green; a tray that starts
+  with already-idle agents never blinks. Blocked still blinks until
+  resolved. Waiting remains a color state — it just stops being a
+  permanent alarm.
+
+- **Setup wizard — the binary installs itself**: `agent-notify setup`
+  walks a freshly downloaded binary through deploying it: self-copy to
+  the canonical location (`~/.local/bin` / `%LOCALAPPDATA%\Programs\agent-notify`,
+  renamed downloads canonicalized back to `agent-notify`), PATH, login
+  residency, config and a test popup. `--status` prints the deployment
+  state, `--yes` takes defaults, `--no-autostart`/`--service`/`--with-wsl`
+  preselect answers. `agent-notify uninstall [--purge-config]` reverses
+  everything.
+- **First-run onboarding**: when a run looks un-deployed (not installed,
+  no autostart, no config) the tray gains a **Set up agent-notify…**
+  menu item and fires a single one-time toast; the wizard opens in a
+  console window on Windows (`agent-notify-console.exe`) or a terminal
+  on Linux. Nothing is ever modified without the user clicking through.
+- **Residency per OS best practice**: Windows Startup shortcut via the
+  wizard itself (no PowerShell-only path anymore); Linux desktops get
+  XDG autostart (`~/.config/autostart/agent-notify.desktop`); headless
+  Linux/WSL gets the systemd user service with the unit **embedded in
+  the binary** (no unit download at install time), optional
+  `loginctl enable-linger`, and exact fix instructions when systemd is
+  off in a WSL distro.
+- **Daemon self-update**: headless `run` (incl. the systemd service and
+  the WSL daemon) now checks for releases daily and applies them on its
+  own — checksum-verified swap, then a restart through
+  `systemctl --user restart agent-notify` when running as a unit
+  (`INVOCATION_ID`). The unit now uses `Restart=always` so the clean
+  self-update exit brings the daemon back on the new binary.
+- **Installers delegate to the wizard**: `install.ps1` and
+  `install.sh --service` now download/verify/place the binary and hand
+  everything else to `setup --yes`, so script installs and manual
+  installs end up identical (same PATH handling, same shortcut, same
+  WSL flow).
+- **Windows installer**: `irm https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.ps1 | iex`
+  — downloads the latest release, verifies the sha256 checksum, installs
+  into `%LOCALAPPDATA%\Programs\agent-notify`. A running tray is stopped
+  and restarted so upgrades work in place; `-WithWSL` also installs the
+  headless daemon inside the WSL distro. The Windows release zip bundles
+  `scripts/install.ps1`.
+
 ## 0.3.0 — 2026-09-11
 
 - **Self-update**: `agent-notify update` (checksum-verified download via

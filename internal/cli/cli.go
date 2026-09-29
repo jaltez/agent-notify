@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"runtime"
 	"strings"
 	"sync"
@@ -23,6 +22,7 @@ import (
 	"github.com/jaltez/agent-notify/internal/engine"
 	"github.com/jaltez/agent-notify/internal/event"
 	"github.com/jaltez/agent-notify/internal/render"
+	"github.com/jaltez/agent-notify/internal/setup"
 	"github.com/jaltez/agent-notify/internal/sink"
 	"github.com/jaltez/agent-notify/internal/tray"
 	"github.com/jaltez/agent-notify/internal/update"
@@ -43,6 +43,9 @@ Commands:
   probe       one pass: show sessions, agents and sink availability
   test        send a test notification through every configured sink
   init        write an annotated example config
+  setup       first-run wizard: install, PATH, autostart/service, WSL
+              (--status shows the current state; --yes takes defaults)
+  uninstall   undo setup (autostart, service, binaries; --purge-config)
   config      path | edit | validate the configuration
   update      self-update from GitHub releases (--check to only look)
   version     print version information
@@ -107,6 +110,10 @@ subcommand:
 		return cmdTest(configPath, stdout, log)
 	case "init":
 		return cmdInit(configPath, rest, stdout)
+	case "setup":
+		return cmdSetup(configPath, rest, stdout, stderr, log)
+	case "uninstall":
+		return cmdUninstall(configPath, rest, stdout, stderr)
 	case "version":
 		return cmdVersion(stdout)
 	case "flytest":
@@ -325,6 +332,30 @@ func cmdTray(configPath string, log *slog.Logger, stderr io.Writer) int {
 	// menu item when a release lands; one-click apply + restart.
 	wireUpdates(ctx, traySink, mgr, log)
 
+	// First-run onboarding: a "Set up…" menu item while the deployment
+	// looks unfinished, plus a single toast pointing at it.
+	if setup.Detect().NeedsSetup() {
+		traySink.SetSetupHook(func() {
+			if err := launchSetupWizard(); err != nil {
+				log.Warn("could not open a terminal for setup", "error", err)
+				mgr.Deliver(setupHelpEvent())
+			}
+		})
+		if setup.NudgeDue() {
+			go func() {
+				select {
+				case <-time.After(10 * time.Second):
+				case <-ctx.Done():
+					return
+				}
+				mgr.Deliver(setupNudgeEvent())
+				if err := setup.MarkNudged(); err != nil {
+					log.Warn("cannot record the setup nudge", "error", err)
+				}
+			}()
+		}
+	}
+
 	// The flyout window must be created on this (locked, main) thread
 	// before the message loop starts pumping.
 	traySink.InitFlyout()
@@ -427,6 +458,24 @@ func updateEvent(latest string) event.Event {
 	}
 }
 
+func setupNudgeEvent() event.Event {
+	return event.Event{
+		Kind:    event.KindSetup,
+		Time:    time.Now(),
+		Session: "agent-notify",
+		Title:   "agent-notify isn't set up yet — tray menu → Set up agent-notify…",
+	}
+}
+
+func setupHelpEvent() event.Event {
+	return event.Event{
+		Kind:    event.KindSetup,
+		Time:    time.Now(),
+		Session: "agent-notify",
+		Title:   "run `agent-notify setup` in a terminal to install",
+	}
+}
+
 func statusToastEvent(st update.Status) event.Event {
 	return event.Event{
 		Kind:    event.KindTest,
@@ -451,6 +500,11 @@ func cmdRun(configPath string, log *slog.Logger) int {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	// A resident daemon keeps itself current: check shortly after start
+	// and daily, apply, then hand over to the new binary.
+	go daemonUpdateLoop(ctx, cancel, log)
 
 	mgr := sink.NewManager(log)
 	for _, s := range sinks {
@@ -461,6 +515,72 @@ func cmdRun(configPath string, log *slog.Logger) int {
 	log.Info("agent-notify running", "version", version(), "backends", strings.Join(eng.Backends(), ","), "sinks", strings.Join(mgr.Names(), ","))
 	<-ctx.Done()
 	return 0
+}
+
+// daemonUpdateLoop is `run` mode's counterpart of the tray's update
+// wiring: no human is watching, so updates apply on their own. When one
+// does, the loop signals the daemon to exit (cancel) after initiating
+// the handover.
+func daemonUpdateLoop(ctx context.Context, cancel context.CancelFunc, log *slog.Logger) {
+	check := func() bool {
+		c, err := update.New()
+		if err != nil {
+			log.Warn("updater unavailable", "error", err)
+			return false
+		}
+		st, err := c.Check(ctx)
+		if err != nil {
+			log.Warn("update check failed", "error", err)
+			return false
+		}
+		if !st.UpdateAvail {
+			return false
+		}
+		if err := c.Apply(ctx, st.Release); err != nil {
+			log.Error("self-update failed", "error", err)
+			return false
+		}
+		log.Info("self-update applied; restarting", "version", st.Latest)
+		if err := restartDaemon(log); err != nil {
+			log.Error("restart failed; the next launch runs the new version", "error", err)
+		}
+		return true
+	}
+	select {
+	case <-time.After(30 * time.Second):
+	case <-ctx.Done():
+		return
+	}
+	if check() {
+		cancel()
+		return
+	}
+	tick := time.NewTicker(24 * time.Hour)
+	defer tick.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-tick.C:
+			if check() {
+				cancel()
+				return
+			}
+		}
+	}
+}
+
+// restartDaemon hands the process over to the (already swapped) binary.
+// Under systemd the restart goes through systemctl so the unit tracks
+// the process; INVOCATION_ID is systemd's marker for "running as a unit".
+func restartDaemon(log *slog.Logger) error {
+	if os.Getenv("INVOCATION_ID") != "" {
+		if err := exec.Command("systemctl", "--user", "restart", setup.ServiceName).Run(); err != nil {
+			return err
+		}
+		return nil
+	}
+	return update.RestartSelf()
 }
 
 func cmdMonitor(configPath string, args []string, stdout io.Writer, log *slog.Logger) int {
@@ -612,11 +732,7 @@ func cmdInit(configPath string, args []string, stdout io.Writer) int {
 		fmt.Fprintf(stdout, "%s already exists (use --force to overwrite)\n", path)
 		return 1
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		fmt.Fprintf(stdout, "create config directory: %v\n", err)
-		return 1
-	}
-	if err := os.WriteFile(path, config.Example, 0o644); err != nil {
+	if err := writeExampleConfig(path); err != nil {
 		fmt.Fprintf(stdout, "write config: %v\n", err)
 		return 1
 	}

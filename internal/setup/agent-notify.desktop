@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=agent-notify
+Comment=Tray notifier for AI coding agents
+Exec=__EXEC__
+Terminal=false
+X-GNOME-Autostart-enabled=true

@@ -45,7 +45,7 @@ archives:
     ids: [windows, windows-console]
     formats: [zip]
     name_template: "{{ .ProjectName }}_{{ .Os }}_{{ .Arch }}"
-    files: [README.md, LICENSE, CHANGELOG.md]
+    files: [README.md, LICENSE, CHANGELOG.md, scripts/install.ps1]
 
 checksum:
   name_template: "checksums.txt"

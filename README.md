@@ -24,7 +24,9 @@ went idle, or got blocked — and silent the rest of the time.
 
 - **Tray icon** — color tracks the worst live state:
   🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all stopped, someone waits · ⚪ idle.
-  Attention states (blocked, waiting) blink until resolved.
+  Blocked blinks until resolved; entering 🟢 blinks briefly (2 min) so a
+  finished fleet catches the eye, then settles into a steady green — an
+  idle fleet is the resting state, not an alarm.
 - **Left click → flyout panel** — fleet summary, spaces grouped by
   priority (blocked first), every agent listed — status dot, subtle runner
   name, and what it's doing — refreshed every second. Mouse wheel scrolls
@@ -37,10 +39,21 @@ went idle, or got blocked — and silent the rest of the time.
 
 ## Quickstart
 
-**Windows** — download `agent-notify_windows_amd64.zip` from the
+**Windows** —
+
+```powershell
+irm https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.ps1 | iex
+```
+
+Installs into `%LOCALAPPDATA%\Programs\agent-notify`, adds it to PATH and
+creates a Startup shortcut. Options: `-NoAutostart`, `-Version v0.3.0`,
+`-WithWSL` (also installs the headless daemon inside the WSL distro as a
+systemd user service; `-WslDistro <name>` picks a non-default distro).
+Manual route: download `agent-notify_windows_amd64.zip` from the
 [latest release](https://github.com/jaltez/agent-notify/releases), unzip,
-run `agent-notify.exe`. (Or
-`winget install jaltez.agent-notify` once the winget manifest lands.)
+run `agent-notify.exe` — a one-time toast and the tray menu offer
+**Set up agent-notify…**, which installs to the standard location and
+registers autostart in a few prompts.
 
 **Linux / WSL** —
 
@@ -48,11 +61,32 @@ run `agent-notify.exe`. (Or
 curl -fsSL https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.sh | sh
 ```
 
-Or `go install github.com/jaltez/agent-notify@latest`.
+Or `go install github.com/jaltez/agent-notify@latest`. A manually
+downloaded binary offers the same `agent-notify setup` wizard.
 
 Then: run it. A tray icon appears; sessions are auto-discovered.
 Left-click the icon for the panel. No config required — `agent-notify
 probe` shows what it can see, `agent-notify test` fires a test popup.
+
+## Setup & uninstall
+
+`agent-notify setup` is the interactive wizard behind all of the above —
+run it from anywhere (a Downloads copy installs itself to the standard
+location: `~/.local/bin`, or `%LOCALAPPDATA%\Programs\agent-notify` on
+Windows). It offers, one prompt at a time:
+
+- install / self-copy to the canonical location (renamed downloads are
+  canonicalized back to `agent-notify`),
+- adding that directory to PATH,
+- residency — Windows: Startup shortcut; Linux desktop: XDG autostart;
+  headless Linux/WSL: systemd user service (+ optional lingering so it
+  runs without a login session),
+- the WSL daemon (from Windows), an annotated config, and a test popup.
+
+`--yes` takes the defaults (what the install scripts pass through),
+`--status` prints the current deployment state, `--no-autostart`,
+`--service`, `--with-wsl`/`--wsl-distro` preselect the answers.
+`agent-notify uninstall [--purge-config]` reverses all of it.
 
 ## Updates
 
@@ -60,7 +94,10 @@ probe` shows what it can see, `agent-notify test` fires a test popup.
   get a toast and a **tray menu → Update & restart** item (download is
   checksum-verified; the swap renames the running exe safely on Windows).
 - CLI: `agent-notify update` applies immediately, `--check` only looks.
-- Package managers update their own way (winget; install.sh re-run).
+- The headless daemon (`run`, incl. the systemd service and the WSL
+  daemon) applies updates on its own — daily check, checksum-verified
+  swap, then restart through systemd when running as a unit.
+- Package managers update their own way (install.ps1 / install.sh re-run).
 
 ## Events
 
@@ -147,14 +184,25 @@ subcommands (`probe`, `test`, `monitor`) still print from terminals.
 
 ## Run at login
 
-- **Windows** — `Win+R` → `shell:startup` → shortcut to `agent-notify.exe`.
-- **Linux/macOS headless** — `agent-notify run` + `contrib/install-systemd.sh`
-  (systemd user service; logs via `journalctl --user -u agent-notify`).
+- **Windows** — `agent-notify setup` (or the installer) creates a Startup
+  shortcut (`shell:startup`, visible and removable; skip with
+  `--no-autostart`).
+- **Linux desktop** — the wizard writes an XDG autostart entry
+  (`~/.config/autostart/agent-notify.desktop`), the standard mechanism
+  for tray apps.
+- **Linux/WSL headless** — `agent-notify setup --service` (or
+  `install.sh --service`) enables the systemd user service; logs via
+  `journalctl --user -u agent-notify`. Optional lingering runs it without
+  a login session. The unit is embedded in the binary — no downloads at
+  install time.
 
 ## Commands
 
 `tray` (default) · `run` (headless daemon) · `monitor [--json] [--all]` ·
-`probe` · `test` · `init [--force]` · `flytest` (UI diagnostics) · `version`
+`probe` · `test` · `init [--force]` · `setup [--status] [--yes]
+[--service] [--no-autostart] [--with-wsl]` · `uninstall [--purge-config]` ·
+`config path|edit|validate` · `update [--check]` · `version` · `flytest`
+(UI diagnostics)
 
 ## Troubleshooting
 
@@ -164,6 +212,9 @@ subcommands (`probe`, `test`, `monitor`) still print from terminals.
 | No popups on Windows | Focus Assist / Do Not Disturb silently queues toasts — check the notification center. |
 | `popup: unavailable` | Neither `notify-send` nor `powershell.exe` in PATH; install one or set `binary` in the sink. |
 | WSL sessions missing on Windows | `wsl.exe -e sh -c 'ls ~/.config/herdr'` must list sockets; non-default herdr paths need `herdr.wsl.extra_path`. |
+| WSL daemon service skipped | systemd off in the distro — set `[boot] systemd=true` in `/etc/wsl.conf`, run `wsl --shutdown`, re-run `setup --service`. |
+| `setup` can't enable the service on WSL | Same fix; `setup --status` shows whether a systemd user manager is reachable. |
+| Setup wizard window closes instantly | It runs in `agent-notify-console.exe`; re-run `agent-notify setup` from any terminal instead. |
 | `no display available` | Headless box — use `run`/`monitor`, not the tray. |
 | Second tray icon | Not possible — a second instance refuses to start by design. |
 
