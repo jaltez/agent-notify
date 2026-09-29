@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.4.0 — 2026-09-29
 
 - **Tray blink fix**: an idle fleet no longer blinks green forever.
   Entering the waiting state now blinks for 2 minutes (the moment the
