@@ -93,7 +93,12 @@ func TestSessionUpDownEdges(t *testing.T) {
 	tr := newTracker("local", "work")
 	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("idle", "w1:p1", "t")}}, time.Now())
 
-	evs, changed := tr.fail(time.Now())
+	// the down edge arrives on the downAfter-th consecutive failure
+	var evs []event.Event
+	var changed bool
+	for i := 0; i < downAfter; i++ {
+		evs, changed = tr.fail(time.Now())
+	}
 	if len(evs) != 1 || evs[0].Kind != event.KindSessionDown || !changed {
 		t.Fatalf("down edge: %v changed=%v", kinds(evs), changed)
 	}
@@ -181,5 +186,39 @@ func TestApplyChangeDetection(t *testing.T) {
 	// and quiet again
 	if _, changed := tr.apply(retitled, time.Now()); changed {
 		t.Error("stable snapshot flagged as changed")
+	}
+}
+
+func TestDownRequiresConsecutiveFailures(t *testing.T) {
+	tr := newTracker("local", "work")
+	now := time.Now()
+	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("idle", "w1:p1", "t")}}, now)
+
+	// One or two failed polls are noise (slow wsl.exe, transient timeout).
+	for i := 0; i < downAfter-1; i++ {
+		evs, changed := tr.fail(now.Add(time.Duration(i) * time.Second))
+		if len(evs) != 0 || changed {
+			t.Fatalf("failure %d flapped the session: %v", i+1, kinds(evs))
+		}
+		if !tr.up {
+			t.Fatalf("failure %d took the session down", i+1)
+		}
+	}
+	// The third consecutive failure marks it down.
+	evs, changed := tr.fail(now)
+	if len(evs) != 1 || evs[0].Kind != event.KindSessionDown || !changed {
+		t.Fatalf("expected session_down on failure %d, got %v", downAfter, kinds(evs))
+	}
+	// Further failures stay silent.
+	if evs, _ := tr.fail(now); len(evs) != 0 {
+		t.Fatalf("duplicate session_down: %v", kinds(evs))
+	}
+	// Recovery resets the counter and announces the comeback.
+	evs, changed = tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("idle", "w1:p1", "t")}}, now)
+	if len(evs) != 1 || evs[0].Kind != event.KindSessionUp || !changed {
+		t.Fatalf("expected session_up on recovery, got %v", kinds(evs))
+	}
+	if !tr.up || tr.fails != 0 {
+		t.Fatalf("recovery state wrong: up=%v fails=%d", tr.up, tr.fails)
 	}
 }
