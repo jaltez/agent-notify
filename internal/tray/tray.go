@@ -233,21 +233,18 @@ func fingerprint(v engine.View) string {
 	return b.String()
 }
 
-// armWaitBlink times the waiting-blink window. Entering waiting from a
-// different state arms a short blink — the fleet just stopped and wants a
-// glance, the same moment the popup fires. Starting directly in waiting
-// (agents idle before the tray launched) never arms: an idle fleet is
-// the resting state, not an alarm.
+// armWaitBlink times the waiting-blink window. Only a genuine "the fleet
+// just stopped and wants a glance" transition arms it — working or
+// blocked collapsing into waiting, the same moment the popup fires.
+// Recovering from an offline session (down → waiting) or seeing the
+// first idle agents at startup does not: those are not finish events,
+// and poll flapping would otherwise re-arm the blink forever.
+// The window is never cleared mid-flight; it just expires.
 func (t *Tray) armWaitBlink(sev string) {
 	prev, hadPrev := t.curSev.Load().(string)
-	switch {
-	case sev == "waiting" && hadPrev && prev != "waiting":
+	if sev == "waiting" && hadPrev && (prev == "working" || prev == "blocked") {
 		t.waitBlinkTill.Store(time.Now().Add(waitingBlinkWindow))
-	case sev != "waiting":
-		t.waitBlinkTill.Store(time.Time{})
 	}
-	// still waiting: keep the running window (staggered finishers don't
-	// extend it; each got its popup the moment it dropped)
 }
 
 // shouldBlink reports whether the icon should be in its attention phase

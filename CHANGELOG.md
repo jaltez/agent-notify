@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.4.1 — 2026-09-29
+
+- **Tray blink hardened**: only a genuine finish transition (working or
+  blocked collapsing into waiting) arms the brief green blink — an
+  offline-recovery flap (`down → waiting`) or idle agents appearing no
+  longer re-arm it. Previously any re-entry into waiting reset the
+  2-minute window, so a noisy backend could keep the icon blinking all
+  day.
+- **Session offline hysteresis**: a session is now declared offline
+  after 3 consecutive failed polls, not on the first timeout — slow
+  `wsl.exe`/`herdr.exe` invocations no longer flash the fleet amber
+  (and, with the fix above, no longer re-arm the blink on recovery).
+
 ## 0.4.0 — 2026-09-29
 
 - **Tray blink fix**: an idle fleet no longer blinks green forever.

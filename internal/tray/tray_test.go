@@ -58,10 +58,31 @@ func TestArmWaitBlink(t *testing.T) {
 		t.Error("persistent waiting must keep the original window")
 	}
 
-	// Leaving waiting clears it.
+	// blocked → waiting (a blocked agent got unstuck and stopped): armed.
+	tr.curSev.Store("blocked")
+	tr.armWaitBlink("waiting")
+	till = armed()
+	if till.IsZero() {
+		t.Error("blocked → waiting should arm the blink")
+	}
+
+	// down → waiting (offline recovery): never re-arms, and the previous
+	// window survives untouched — a poll flap must not reset the blink.
 	tr.curSev.Store("waiting")
+	time.Sleep(20 * time.Millisecond)
+	tr.armWaitBlink("down")
+	tr.curSev.Store("down")
+	tr.armWaitBlink("waiting")
+	if got := armed(); !got.Equal(till) {
+		t.Error("down → waiting must neither re-arm nor clear the window")
+	}
+
+	// idle → waiting (idle agents appeared): not a finish event.
+	tr.curSev.Store("idle")
+	tr.waitBlinkTill.Store(time.Time{})
 	tr.armWaitBlink("idle")
+	tr.armWaitBlink("waiting")
 	if !armed().IsZero() {
-		t.Error("leaving waiting must clear the window")
+		t.Error("idle → waiting should not arm the blink")
 	}
 }

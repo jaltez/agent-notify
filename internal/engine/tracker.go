@@ -8,12 +8,19 @@ import (
 	"github.com/jaltez/agent-notify/internal/herdr"
 )
 
+// downAfter is how many consecutive failed polls mark a session offline.
+// One failed poll is usually a slow wsl.exe invocation or a transient
+// timeout, not an outage — flapping the session (and the tray severity
+// with it) on every spike makes the icon lie.
+const downAfter = 3
+
 // tracker holds the last known state of one session and turns snapshot
 // diffs into events.
 type tracker struct {
 	host, name string
 	seen       bool // had at least one successful snapshot
 	up         bool // last fetch succeeded
+	fails      int  // consecutive failed fetches (hysteresis before down)
 
 	agents map[string]herdr.Agent // keyed by PaneID
 	order  []string               // pane keys in last snapshot order (stable UI)
@@ -35,6 +42,7 @@ func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event,
 		evs = append(evs, t.sessionEvent(event.KindSessionUp, now))
 	}
 	t.seen, t.up = true, true
+	t.fails = 0
 
 	next := make(map[string]herdr.Agent, len(snap.Agents))
 	nextOrder := make([]string, 0, len(snap.Agents))
@@ -90,13 +98,15 @@ func (t *tracker) transition(prev, cur herdr.Agent, now time.Time) *event.Event 
 	return &ev
 }
 
-// fail records a failed fetch, emitting session_down on the up→down edge.
+// fail records a failed fetch, emitting session_down on the up→down edge
+// after downAfter consecutive failures (transient spikes stay silent).
 func (t *tracker) fail(now time.Time) (evs []event.Event, changed bool) {
-	if t.up {
+	t.fails++
+	if t.up && t.fails >= downAfter {
+		t.up = false
 		evs = append(evs, t.sessionEvent(event.KindSessionDown, now))
 		changed = true
 	}
-	t.up = false
 	return evs, changed
 }
 
