@@ -16,6 +16,10 @@ herdr sessions (local · windows · wsl)
 [![ci](https://github.com/jaltez/agent-notify/actions/workflows/ci.yml/badge.svg)](https://github.com/jaltez/agent-notify/actions/workflows/ci.yml)
 [![license](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
+<p align="center">
+  <img src="docs/flyout.png" alt="agent-notify flyout panel: spaces on Windows, WSL and Linux hosts, with agents blocked, working and done" width="640">
+</p>
+
 ## Why
 
 Agent runners are quiet: you check on them, or you don't. agent-notify makes
