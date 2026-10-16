@@ -1,5 +1,30 @@
 # Changelog
 
+## Unreleased
+
+- **Green is now transition-latched**: a tray started over an
+  already-idle fleet reads ⚪ gray (previously solid green from launch);
+  🟢 shows only while an agent's observed finish (working → idle/done)
+  hasn't been followed by new work; these are the semantics the
+  attention blink already uses. Blocked agents resolving to idle no
+  longer count as waiting either. Menu and flyout label latched agents
+  "waiting".
+- **Fixed `done` rows painting gray**: the flyout dot/wash for a
+  finished agent fell through to the idle color while the icon and
+  toast showed green; row colors now follow the latch (green = finished
+  and waiting for you, gray = resting).
+- **Sticky status across unknown flaps**: herdr's screen detection can
+  briefly report `unknown` for a live agent, which dropped it from all
+  counts (the icon dipping to gray mid-work) and grayed its row; an
+  unknown reading now keeps the last known status.
+- Removed dead `statusRank` helper.
+- **Removed the stale `contrib/` systemd helpers**: `install-systemd.sh`
+  and its unit copy were superseded by `agent-notify setup --service`
+  (unit embedded in the binary) and referenced by nothing current; the
+  contrib unit had drifted to `Restart=on-failure`, which silently
+  broke the daemon's self-update restart. `make install` now installs
+  only the binary.
+
 ## 0.4.1 (2026-09-29)
 
 - **Tray blink hardened**: only a genuine finish transition (working or

@@ -27,14 +27,19 @@ puts fleet status in the tray and fires a popup when an agent finishes, goes
 idle, or gets blocked. Otherwise it stays out of the way.
 
 - **Tray icon**: color tracks the worst live state:
-  🔴 blocked · 🟠 session offline · 🔵 working · 🟢 all stopped, someone waits · ⚪ idle.
-  Blocked blinks until resolved. Entering 🟢 blinks for 2 minutes, then
-  settles into a steady green.
+  🔴 blocked · 🟠 session offline · 🔵 working · 🟢 an agent finished and hasn't resumed · ⚪ idle.
+  🟢 is transition-latched: green means agent-notify *saw* the finish, so
+  a tray started over an already-idle fleet reads ⚪ gray, and green
+  clears as soon as the agent starts working again. Blocked blinks until
+  resolved. Entering 🟢 blinks for 2 minutes, then settles into a steady
+  green.
 - **Left click → flyout panel**: fleet summary; spaces grouped by
   priority (blocked first); every agent listed with status dot, dim
-  runner name, and current title; refreshed every second. Mouse wheel
-  scrolls past 20 rows; auto-close (8 s) only applies while everything
-  fits; outside click / Escape always dismiss.
+  runner name, and current title; refreshed every second. Row wash
+  matches the icon: green = finished and waiting for you, gray =
+  resting, blue = working, red = blocked. Mouse wheel scrolls past
+  20 rows; auto-close (8 s) only applies while everything fits;
+  outside click / Escape always dismiss.
 - **Right click → menu**: same information as a native menu (the only UI
   on Linux/macOS).
 - **Popups**: Windows toasts (or notify-send) when an agent needs
@@ -50,7 +55,7 @@ irm https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.p
 ```
 
 Installs into `%LOCALAPPDATA%\Programs\agent-notify`, adds it to PATH and
-creates a Startup shortcut. Options: `-NoAutostart`, `-Version v0.4.0`,
+creates a Startup shortcut. Options: `-NoAutostart`, `-Version v0.4.1`,
 `-WithWSL` (also installs the headless daemon inside the WSL distro as a
 systemd user service; `-WslDistro <name>` picks a non-default distro).
 Manual route: download `agent-notify_windows_amd64.zip` from the

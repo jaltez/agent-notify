@@ -124,7 +124,7 @@ func TestFailBeforeFirstSuccessIsSilent(t *testing.T) {
 func TestViewSeverityAndCounts(t *testing.T) {
 	var v View
 	v.Sessions = []SessionView{
-		{Host: "local", Name: "a", Up: true, Agents: []AgentView{{Status: "working"}, {Status: "idle"}}},
+		{Host: "local", Name: "a", Up: true, Agents: []AgentView{{Status: "working"}, {Status: "idle", Wants: true}}},
 		{Host: "local", Name: "b", Up: false},
 	}
 	c := v.Counts()
@@ -142,10 +142,105 @@ func TestViewSeverityAndCounts(t *testing.T) {
 	if s := v.Summary(); s != "1 working · 1 waiting" {
 		t.Errorf("summary = %q", s)
 	}
-	// green only when every agent stopped and someone waits
+	// green only when every agent stopped and someone latched a finish
 	v.Sessions[0].Agents[0].Status = "done"
+	v.Sessions[0].Agents[0].Wants = true
 	if v.Severity() != "waiting" {
 		t.Errorf("severity = %q, want waiting", v.Severity())
+	}
+	// an idle agent that never latched is quiet, not waiting
+	v.Sessions[0].Agents[1].Wants = false
+	v.Sessions[0].Agents[0] = AgentView{Status: "idle"}
+	if v.Severity() != "idle" {
+		t.Errorf("severity = %q, want idle for unlatched fleet", v.Severity())
+	}
+	if s := v.Summary(); s != "all quiet" {
+		t.Errorf("summary = %q, want all quiet", s)
+	}
+}
+
+func TestTrackerAttentionLatch(t *testing.T) {
+	tr := newTracker("local", "work")
+	pane := "w1:p1"
+	view := func() View {
+		e := &Engine{sessions: map[string]*tracker{"local/work": tr}}
+		return e.View()
+	}
+	// baseline idle: resting, not waiting; a fresh tray must read gray
+	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("idle", pane, "t")}}, time.Now())
+	if view().Severity() != "idle" {
+		t.Fatal("startup with idle agents must not be waiting")
+	}
+	// observed finish latches green
+	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("working", pane, "t")}}, time.Now())
+	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("idle", pane, "t")}}, time.Now())
+	v := view()
+	if v.Severity() != "waiting" || !v.Sessions[0].Agents[0].Wants {
+		t.Fatalf("finish should latch waiting: %+v", v)
+	}
+	// idle → done reshuffle keeps the latch
+	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("done", pane, "t")}}, time.Now())
+	if view().Severity() != "waiting" {
+		t.Fatal("idle→done must keep the latch")
+	}
+	// resuming work spends the attention
+	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("working", pane, "t")}}, time.Now())
+	if v := view(); v.Severity() != "working" || v.Sessions[0].Agents[0].Wants {
+		t.Fatalf("work must clear the latch: %+v", v)
+	}
+	// a second finish latches again
+	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("done", pane, "t")}}, time.Now())
+	if view().Severity() != "waiting" {
+		t.Fatal("second finish should latch again")
+	}
+	// the pane disappearing drops the latch with it
+	tr.apply(&herdr.Snapshot{}, time.Now())
+	if v := view(); v.Severity() != "idle" || len(v.Sessions[0].Agents) != 0 {
+		t.Fatalf("agent_left must drop the latch: %+v", v)
+	}
+}
+
+func TestTrackerStickyUnknown(t *testing.T) {
+	tr := newTracker("local", "work")
+	pane := "w1:p1"
+	tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("working", pane, "t")}}, time.Now())
+	// a detection flap must not drop the agent from counts nor gray its row
+	evs, _ := tr.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("unknown", pane, "t")}}, time.Now())
+	if len(evs) != 0 {
+		t.Fatalf("unknown flap emitted events: %v", kinds(evs))
+	}
+	if a := tr.agents[pane]; a.Status != "working" {
+		t.Fatalf("flap should keep last status, got %q", a.Status)
+	}
+	// an unknown reading at baseline stays unknown (a real reading wins later)
+	tr2 := newTracker("local", "other")
+	tr2.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("unknown", "w9:p1", "t")}}, time.Now())
+	tr2.apply(&herdr.Snapshot{Agents: []herdr.Agent{agent("working", "w9:p1", "t")}}, time.Now())
+	if a := tr2.agents["w9:p1"]; a.Status != "working" {
+		t.Fatalf("baseline unknown must not be sticky, got %q", a.Status)
+	}
+}
+
+func TestRowSeverity(t *testing.T) {
+	cases := []struct {
+		status string
+		wants  bool
+		want   string
+	}{
+		{"blocked", false, "blocked"},
+		{"blocked", true, "blocked"},
+		{"working", false, "working"},
+		{"idle", true, "waiting"},
+		{"done", true, "waiting"},
+		{"idle", false, "idle"},
+		{"done", false, "idle"},
+		{"unknown", false, "idle"},
+		{"unknown", true, "idle"},
+	}
+	for _, tc := range cases {
+		if got := RowSeverity(tc.status, tc.wants); got != tc.want {
+			t.Errorf("RowSeverity(%q, %v) = %q, want %q", tc.status, tc.wants, got, tc.want)
+		}
 	}
 }
 

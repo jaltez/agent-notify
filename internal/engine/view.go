@@ -8,10 +8,14 @@ import (
 	"github.com/jaltez/agent-notify/internal/herdr"
 )
 
-// AgentView is one agent row in a View.
+// AgentView is one agent row in a View. Wants is the attention latch:
+// true while an observed finish (working → idle/done) has not been
+// followed by new work; idle/done agents without it are resting, not
+// waiting for you.
 type AgentView struct {
 	Name    string
 	Status  string
+	Wants   bool
 	Title   string
 	Project string
 	PaneID  string
@@ -53,9 +57,9 @@ func (v View) Counts() Counts {
 			case herdr.StatusWorking:
 				c.Working++
 			case herdr.StatusIdle, herdr.StatusDone:
-				c.Waiting++
-			case herdr.StatusBlocked:
-				c.Blocked++
+				if a.Wants {
+					c.Waiting++
+				}
 			}
 		}
 	}
@@ -64,8 +68,11 @@ func (v View) Counts() Counts {
 
 // Severity is the view state driving the tray icon color. Precedence:
 // blocked (red) > offline (amber) > working (blue) > waiting (green) >
-// idle (gray). Working beats waiting so a busy fleet reads as "busy";
-// green shows only when every agent stopped and at least one wants you.
+// idle (gray). Working beats waiting so a busy fleet reads as "busy".
+// Green is transition-latched: only an agent that finished while
+// agent-notify was watching (AgentView.Wants) shows green; a fleet
+// already idle at startup reads gray, matching what the popups and the
+// attention blink actually reported.
 func (v View) Severity() string {
 	c := v.Counts()
 	switch {
@@ -129,13 +136,14 @@ func (e *Engine) View() View {
 			sv.Agents = append(sv.Agents, AgentView{
 				Name:    a.Name,
 				Status:  a.Status,
+				Wants:   t.wants[k],
 				Title:   a.Title,
 				Project: a.Project,
 				PaneID:  a.PaneID,
 				Focused: a.Focused,
 			})
 		}
-		// agents keep the source's stable order — no reordering between
+		// agents keep the source's stable order, no reordering between
 		// refreshes (rows must not cycle in the UI)
 		v.Sessions = append(v.Sessions, sv)
 	}
@@ -166,7 +174,7 @@ func spaceRank(s SessionView) int {
 		case herdr.StatusBlocked:
 			return 0
 		case herdr.StatusIdle, herdr.StatusDone:
-			if r > 2 {
+			if a.Wants && r > 2 {
 				r = 2
 			}
 		case herdr.StatusWorking:
@@ -178,17 +186,20 @@ func spaceRank(s SessionView) int {
 	return r
 }
 
-func statusRank(status string) int {
+// RowSeverity is the color class for one agent row (tray flyout dot and
+// wash, menu label). done and a latched idle read as waiting: the
+// strongest "finished, needs you" signal; an unlatched idle/done pane
+// is quiet gray, and unknown stays gray.
+func RowSeverity(status string, wants bool) string {
 	switch status {
 	case herdr.StatusBlocked:
-		return 0
+		return "blocked"
 	case herdr.StatusWorking:
-		return 1
-	case herdr.StatusIdle:
-		return 2
-	case herdr.StatusDone:
-		return 3
-	default:
-		return 4
+		return "working"
+	case herdr.StatusIdle, herdr.StatusDone:
+		if wants {
+			return "waiting"
+		}
 	}
+	return "idle"
 }

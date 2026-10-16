@@ -234,7 +234,7 @@ func fingerprint(v engine.View) string {
 }
 
 // armWaitBlink times the waiting-blink window. Only a genuine "the fleet
-// just stopped and wants a glance" transition arms it — working or
+// just stopped and wants a glance" transition arms it: working or
 // blocked collapsing into waiting, the same moment the popup fires.
 // Recovering from an offline session (down → waiting) or seeing the
 // first idle agents at startup does not: those are not finish events,
@@ -248,7 +248,7 @@ func (t *Tray) armWaitBlink(sev string) {
 }
 
 // shouldBlink reports whether the icon should be in its attention phase
-// at now. Blocked blinks until resolved — a stuck agent cannot unstick
+// at now. Blocked blinks until resolved; a stuck agent cannot unstick
 // itself. Waiting blinks only within its window after the fleet entered
 // the state.
 func shouldBlink(sev string, waitTill, now time.Time) bool {
@@ -365,7 +365,7 @@ func (t *Tray) rebuildMenu(v engine.View, onTest func()) {
 	t.tree = tree
 }
 
-// updateMenu rewrites titles/tooltips on the existing menu — safe while
+// updateMenu rewrites titles/tooltips on the existing menu, safe while
 // the menu is open (Windows paints the new strings in place).
 func (t *Tray) updateMenu(v engine.View) {
 	t.tree.summary.SetTitle(v.Summary())
@@ -396,8 +396,8 @@ func sessionLabel(s engine.SessionView) string {
 }
 
 func agentLabel(a engine.AgentView) string {
-	status := a.Status
-	if status == "" {
+	status := engine.RowSeverity(a.Status, a.Wants)
+	if a.Status == "" {
 		status = "unknown"
 	}
 	label := status + " · " + a.Name

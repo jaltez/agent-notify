@@ -10,7 +10,7 @@ import (
 
 // downAfter is how many consecutive failed polls mark a session offline.
 // One failed poll is usually a slow wsl.exe invocation or a transient
-// timeout, not an outage — flapping the session (and the tray severity
+// timeout, not an outage; flapping the session (and the tray severity
 // with it) on every spike makes the icon lie.
 const downAfter = 3
 
@@ -24,15 +24,21 @@ type tracker struct {
 
 	agents map[string]herdr.Agent // keyed by PaneID
 	order  []string               // pane keys in last snapshot order (stable UI)
+
+	// wants holds the panes whose last finish (working → idle/done) has
+	// not been followed by new work (the attention latch). It drives the
+	// green severity: agents already idle at startup never latch, so a
+	// fresh tray boots gray instead of green.
+	wants map[string]bool
 }
 
 func newTracker(host, name string) *tracker {
-	return &tracker{host: host, name: name, agents: map[string]herdr.Agent{}}
+	return &tracker{host: host, name: name, agents: map[string]herdr.Agent{}, wants: map[string]bool{}}
 }
 
 // apply folds a successful snapshot in and returns the transition events.
 // The first snapshot is a baseline: it populates state without events.
-// changed is true only when the view-relevant state actually moved — the
+// changed is true only when the view-relevant state actually moved; the
 // tray rebuilds its menu on it and must not do that every poll.
 func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event, changed bool) {
 	first := !t.seen
@@ -48,6 +54,9 @@ func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event,
 	nextOrder := make([]string, 0, len(snap.Agents))
 	for i, a := range snap.Agents {
 		k := agentKey(a, i)
+		if prev, ok := t.agents[k]; ok {
+			a = t.stickyStatus(prev, a)
+		}
 		next[k] = a
 		nextOrder = append(nextOrder, k)
 		prev, ok := t.agents[k]
@@ -61,6 +70,7 @@ func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event,
 			if ev := t.transition(prev, a, now); ev != nil {
 				evs = append(evs, *ev)
 			}
+			t.trackWants(k, prev.Status, a.Status)
 			changed = true
 		case prev != a: // title/project/focus refresh: view-only change
 			changed = true
@@ -71,12 +81,41 @@ func (t *tracker) apply(snap *herdr.Snapshot, now time.Time) (evs []event.Event,
 			if !first {
 				evs = append(evs, t.agentEvent(event.KindAgentLeft, prev, herdr.Agent{}, now))
 			}
+			delete(t.wants, k)
 			changed = true
 		}
 	}
 	t.agents = next
 	t.order = nextOrder
 	return evs, changed
+}
+
+// stickyStatus bridges unknown flaps: herdr's screen detection can
+// briefly report unknown for a live agent, which would drop it from
+// every count (the icon could dip to gray mid-work) and gray out its
+// row. An unknown reading keeps the previous status; title, project and
+// focus still refresh. A pane never seen with a real status stays
+// unknown.
+func (t *tracker) stickyStatus(prev, cur herdr.Agent) herdr.Agent {
+	if cur.Status == herdr.StatusUnknown && prev.Status != herdr.StatusUnknown {
+		cur.Status = prev.Status
+	}
+	return cur
+}
+
+// trackWants maintains the attention latch on status transitions: an
+// observed finish (working → idle/done) latches, any departure from
+// idle/done (new work, blocked) unlatches, and idle ↔ done reshuffles
+// keep the standing latch.
+func (t *tracker) trackWants(k, prev, cur string) {
+	switch cur {
+	case herdr.StatusIdle, herdr.StatusDone:
+		if prev == herdr.StatusWorking {
+			t.wants[k] = true
+		}
+	default:
+		delete(t.wants, k)
+	}
 }
 
 // transition maps a status change to an event, or nil for noise.

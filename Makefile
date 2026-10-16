@@ -45,11 +45,9 @@ vet:
 clean:
 	rm -rf bin dist
 
-# Installs the Linux binary and the systemd user service (headless run).
+# Installs the Linux binary. The systemd user service is deployed by
+# `agent-notify setup --service` (unit embedded in the binary).
 PREFIX ?= /usr/local
 
 install: linux
 	install -Dm755 bin/$(BINARY) $(DESTDIR)$(PREFIX)/bin/$(BINARY)
-	install -Dm644 contrib/agent-notify.service \
-		$(DESTDIR)$(HOME)/.config/systemd/user/agent-notify.service
-	systemctl --user daemon-reload

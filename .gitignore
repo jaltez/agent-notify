@@ -6,3 +6,6 @@ dist/
 .vscode/
 .DS_Store
 .zcode/
+.pi/
+.omp/
+.opencode/
