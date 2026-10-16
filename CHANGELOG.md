@@ -1,28 +1,26 @@
 # Changelog
 
-## 0.4.1 — 2026-09-29
+## 0.4.1 (2026-09-29)
 
 - **Tray blink hardened**: only a genuine finish transition (working or
-  blocked collapsing into waiting) arms the brief green blink — an
+  blocked collapsing into waiting) arms the brief green blink; an
   offline-recovery flap (`down → waiting`) or idle agents appearing no
   longer re-arm it. Previously any re-entry into waiting reset the
   2-minute window, so a noisy backend could keep the icon blinking all
   day.
 - **Session offline hysteresis**: a session is now declared offline
-  after 3 consecutive failed polls, not on the first timeout — slow
+  after 3 consecutive failed polls, not on the first timeout, so slow
   `wsl.exe`/`herdr.exe` invocations no longer flash the fleet amber
   (and, with the fix above, no longer re-arm the blink on recovery).
 
-## 0.4.0 — 2026-09-29
+## 0.4.0 (2026-09-29)
 
 - **Tray blink fix**: an idle fleet no longer blinks green forever.
   Entering the waiting state now blinks for 2 minutes (the moment the
   popup fires), then settles into a steady green; a tray that starts
   with already-idle agents never blinks. Blocked still blinks until
-  resolved. Waiting remains a color state — it just stops being a
-  permanent alarm.
-
-- **Setup wizard — the binary installs itself**: `agent-notify setup`
+  resolved.
+- **Setup wizard**: the binary installs itself. `agent-notify setup`
   walks a freshly downloaded binary through deploying it: self-copy to
   the canonical location (`~/.local/bin` / `%LOCALAPPDATA%\Programs\agent-notify`,
   renamed downloads canonicalized back to `agent-notify`), PATH, login
@@ -44,7 +42,7 @@
   off in a WSL distro.
 - **Daemon self-update**: headless `run` (incl. the systemd service and
   the WSL daemon) now checks for releases daily and applies them on its
-  own — checksum-verified swap, then a restart through
+  own: checksum-verified swap, then a restart through
   `systemctl --user restart agent-notify` when running as a unit
   (`INVOCATION_ID`). The unit now uses `Restart=always` so the clean
   self-update exit brings the daemon back on the new binary.
@@ -54,17 +52,17 @@
   installs end up identical (same PATH handling, same shortcut, same
   WSL flow).
 - **Windows installer**: `irm https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.ps1 | iex`
-  — downloads the latest release, verifies the sha256 checksum, installs
+  downloads the latest release, verifies the sha256 checksum, installs
   into `%LOCALAPPDATA%\Programs\agent-notify`. A running tray is stopped
   and restarted so upgrades work in place; `-WithWSL` also installs the
   headless daemon inside the WSL distro. The Windows release zip bundles
   `scripts/install.ps1`.
 
-## 0.3.0 — 2026-09-11
+## 0.3.0 (2026-09-11)
 
 - **Self-update**: `agent-notify update` (checksum-verified download via
-  GitHub releases, safe running-exe swap) plus tray integration — silent
-  check at startup + daily, toast and an "Update & restart" menu item
+  GitHub releases, safe running-exe swap) plus tray integration: silent
+  check at startup and daily, toast and an "Update & restart" menu item
   when a release lands.
 - **Install script**: `curl …/install.sh | sh` for Linux/WSL.
 - **goreleaser pipeline**: tag-driven releases with `checksums.txt`;
@@ -73,12 +71,12 @@
   falls back to the Windows-side `%APPDATA%` config when no local one
   exists (one file for both sides).
 
-## 0.2.0 — 2026-09-07
+## 0.2.0 (2026-09-07)
 
 ### Added
 
 - **Flyout panel** (Windows): left-click the tray icon for a live status
-  panel — spaces grouped by attention priority, every agent listed
+  panel: spaces grouped by attention priority, every agent listed
   (title-first two-line rows, dim runner column, whole-block status wash,
   hover selection). Grows to the top of the work area; mouse-wheel
   scrolling when the list outgrows the screen; auto-close (8 s) only while
@@ -92,8 +90,8 @@
 
 ### Changed
 
-- Windows binary is now `windowsgui` — no console window when launched
-  (CLI subcommands re-attach; debug console build still shipped).
+- Windows binary is now `windowsgui`: no console window when launched.
+  CLI subcommands re-attach; debug console build still shipped.
 - Tray menu lists all agents (cap removed); flyout sizing grows to the
   top of the work area before scrolling.
 - Icon rendering refactored to shared pixel functions (filled disc +
@@ -101,7 +99,7 @@
   some systems; children spawn with `CREATE_NO_WINDOW` (no console
   flashes); single-instance tray lock.
 
-## 0.1.0 — 2026-09-07
+## 0.1.0 (2026-09-07)
 
 Initial release.
 

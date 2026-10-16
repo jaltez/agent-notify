@@ -1,5 +1,5 @@
 #!/bin/sh
-# install.sh — one-line installer for agent-notify (Linux / WSL):
+# One-line installer for agent-notify (Linux / WSL):
 #   curl -fsSL https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.sh | sh
 #   curl -fsSL https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.sh | sh -s -- --service
 # Downloads the latest release from GitHub, verifies its checksum and
@@ -93,8 +93,8 @@ esac
 echo "install: run 'agent-notify' (tray) or 'agent-notify probe' to start"
 
 if [ "$SERVICE" = 1 ]; then
-	# The binary configures itself: unit file, systemctl enable --now,
-	# PATH — identical to an interactive `agent-notify setup --service`.
+	# The binary configures itself (unit file, systemctl enable --now,
+	# PATH), identical to an interactive `agent-notify setup --service`.
 	exec "$PREFIX/agent-notify" setup --yes --service
 else
 	echo "install: run 'agent-notify setup' to configure autostart or a systemd service"
