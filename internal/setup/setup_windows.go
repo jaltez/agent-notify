@@ -139,7 +139,7 @@ func platformAddToPath(dir string) error {
 	return nil
 }
 
-// broadcastEnvChange notifies the shell about the PATH update — the
+// broadcastEnvChange notifies the shell about the PATH update, the
 // SetEnvironmentVariable equivalent of .NET, which does this too.
 func broadcastEnvChange() {
 	const (
@@ -159,7 +159,7 @@ func broadcastEnvChange() {
 }
 
 // platformStopInstances stops agent-notify processes that would lock the
-// files being replaced — a tray running from the install dir — sparing
+// files being replaced (a tray running from the install dir), sparing
 // the wizard itself. Returns whether anything was stopped.
 func platformStopInstances(selfExe string) bool {
 	script := fmt.Sprintf(`$p = Get-Process '%s','%s' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -ne '%s' }
@@ -175,7 +175,7 @@ func platformWSLAvailable() bool {
 }
 
 // platformInstallWSL installs the headless daemon inside a WSL distro by
-// piping the repository's install.sh through it with --service — which
+// piping the repository's install.sh through it with --service, which
 // in turn runs `agent-notify setup --yes --service` inside the distro.
 func platformInstallWSL(distro string, w io.Writer) error {
 	// Point at the tree the running binary came from; dev builds use main.
@@ -223,7 +223,7 @@ func platformRemoveInstalled(st Status) []string {
 	} else {
 		notes = append(notes, "no installed binaries found (portable mode?)")
 	}
-	// Succeeds only when we were the dir's sole tenant — by design.
+	// Succeeds only when we were the dir's sole tenant, by design.
 	_ = os.Remove(st.InstallDir)
 	return notes
 }

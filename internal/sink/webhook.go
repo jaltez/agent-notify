@@ -17,7 +17,7 @@ import (
 // is configured.
 const defaultWebhookTimeout = 5 * time.Second
 
-// Webhook POSTs every event to an HTTP endpoint — the JSON event by
+// Webhook POSTs every event to an HTTP endpoint: the JSON event by
 // default, or a rendered body_template for services with fixed payload
 // shapes (Discord, Slack, ntfy, Home Assistant, ...).
 type Webhook struct {

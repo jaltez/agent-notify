@@ -45,7 +45,7 @@ type Status struct {
 }
 
 // Check compares the running build against the latest release.
-// Development builds ("dev") never report an update — they only show the
+// Development builds ("dev") never report an update; they only show the
 // latest published version.
 func (c *Checker) Check(ctx context.Context) (Status, error) {
 	var st Status
@@ -94,10 +94,10 @@ func RestartSelf() error {
 // Describe renders a Status for humans.
 func (s Status) Describe() string {
 	if s.Latest == "none" {
-		return fmt.Sprintf("current %s — no releases published", s.Current)
+		return fmt.Sprintf("current %s, no releases published", s.Current)
 	}
 	if !buildinfo.IsRelease() {
-		return fmt.Sprintf("development build — latest release is %s", s.Latest)
+		return fmt.Sprintf("development build, latest release is %s", s.Latest)
 	}
 	if s.UpdateAvail {
 		return fmt.Sprintf("update available: %s → %s", s.Current, s.Latest)

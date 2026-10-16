@@ -67,7 +67,7 @@ func TestArmWaitBlink(t *testing.T) {
 	}
 
 	// down → waiting (offline recovery): never re-arms, and the previous
-	// window survives untouched — a poll flap must not reset the blink.
+	// window survives untouched; a poll flap must not reset the blink.
 	tr.curSev.Store("waiting")
 	time.Sleep(20 * time.Millisecond)
 	tr.armWaitBlink("down")

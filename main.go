@@ -1,4 +1,4 @@
-// agent-notify — tray notifier for AI coding agents (herdr today).
+// agent-notify: tray notifier for AI coding agents (herdr today).
 package main
 
 import (

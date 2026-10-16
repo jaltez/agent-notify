@@ -90,8 +90,8 @@ func New(cfg Config, opts ...Option) (*Engine, error) {
 			e.backends = append(e.backends, &backendRun{b: l, poll: h.Local.Poll.D(), timeout: h.Local.Timeout.D()})
 		}
 	}
-	// Auto: enabled whenever herdr.exe resolves — native Windows, or the
-	// Windows side polled from WSL via interop. A resolve failure under
+	// Auto: enabled whenever herdr.exe resolves (native Windows, or the
+	// Windows side polled from WSL via interop). A resolve failure under
 	// "auto" just disables the backend.
 	if use, explicit := want(h.Windows.Enabled, true); use {
 		w, err := herdr.NewWindows(h.Windows.Binary, h.Windows.Sessions, h.Windows.Timeout.D())

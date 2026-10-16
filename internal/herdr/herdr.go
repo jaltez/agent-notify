@@ -1,5 +1,5 @@
 // Package herdr implements the herdr source: session discovery and
-// snapshot polling across three backends —
+// snapshot polling across three backends:
 //
 //   - local:   native Unix sockets at ~/.config/herdr (Linux, WSL, macOS)
 //   - windows: herdr.exe sessions (native Windows, or the Windows side
