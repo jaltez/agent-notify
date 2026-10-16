@@ -7,11 +7,11 @@
 .DESCRIPTION
     Downloads the latest GitHub release, verifies the sha256 checksum,
     and installs the binaries into %LOCALAPPDATA%\Programs\agent-notify.
-    Everything else — user PATH, Startup shortcut (skipped with
-    -NoAutostart), config, test popup, and with -WithWSL the headless
-    daemon inside the WSL distro — is delegated to
-    `agent-notify-console.exe setup --yes`, the same wizard a manually
-    downloaded binary offers, so all installs end up identical.
+    Everything else is delegated to `agent-notify-console.exe setup --yes`:
+    user PATH, Startup shortcut (skipped with -NoAutostart), config, test
+    popup, and with -WithWSL the headless daemon inside the WSL distro.
+    That is the same wizard a manually downloaded binary offers, so all
+    installs end up identical.
 #>
 [CmdletBinding(SupportsShouldProcess)]
 param(
@@ -103,8 +103,8 @@ try {
         Write-Host "install: installed $Dir"
     }
 
-    # The binary configures itself — PATH, Startup shortcut, config, test
-    # popup — so script installs and manual `agent-notify setup` installs
+    # The binary configures itself (PATH, Startup shortcut, config, test
+    # popup), so script installs and manual `agent-notify setup` installs
     # are identical. Run via the console twin so output shows under irm|iex.
     $setupArgs = @('setup', '--yes')
     if ($NoAutostart) { $setupArgs += '--no-autostart' }

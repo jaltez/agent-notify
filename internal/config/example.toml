@@ -1,9 +1,9 @@
-# agent-notify configuration — written by `agent-notify init`.
+# agent-notify configuration, written by `agent-notify init`.
 # Every key below is optional; the values shown are the defaults.
 # Path precedence: --config flag > $AGENT_NOTIFY_CONFIG > this file.
 
 # Which events reach the sinks. "attention" = agent_idle, agent_done,
-# agent_blocked — an agent stopped working and probably wants a human.
+# agent_blocked: an agent stopped working and probably wants a human.
 # Use explicit kinds, "all", or "none" for finer control.
 events = ["attention"]
 
@@ -33,7 +33,7 @@ timeout    = "3s"
 socket_dir = ""    # override ~/.config/herdr
 binary     = "herdr"
 
-# herdr.exe sessions — Windows-native when running on Windows, or the
+# herdr.exe sessions: Windows-native when running on Windows, or the
 # Windows side polled from WSL via interop. Auto = on when the binary is
 # found in PATH. "sessions" lists extra named sessions beyond the default.
 [herdr.windows]
@@ -90,13 +90,11 @@ type = "bell"
 # Or a single shell string: command = ["afplay /System/Library/Sounds/Glass.aiff"], shell = true
 # timeout = "10s"
 
-# POST the event as JSON (or a rendered body_template) to an HTTP endpoint —
-# Discord/Slack/ntfy/Home Assistant webhooks all work through this.
+# POST the event as JSON (or a rendered body_template) to an HTTP endpoint;
 # [[sink]]
 # type     = "webhook"
 # url      = "https://example.com/hook"
 # method   = "POST"
 # headers  = { Authorization = "Bearer ..." }
 # timeout  = "5s"
-# body_template = '{"text": "{{.Agent}} {{.Verb}} — {{.Title}}"}'
-# content_type  = "application/json"
+# body_template = '{"text": "{{.Agent}} {{.Verb}} - {{.Title}}"}'
