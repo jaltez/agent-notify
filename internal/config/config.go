@@ -3,7 +3,7 @@
 // Precedence for the config file location: --config flag, then the
 // AGENT_NOTIFY_CONFIG environment variable, then
 // <os.UserConfigDir>/agent-notify/config.toml. A missing file means "use the
-// defaults" — agent-notify works with zero configuration.
+// defaults"; agent-notify works with zero configuration.
 package config
 
 import (
@@ -222,7 +222,7 @@ func Path(flagValue string) string {
 var mntC = "/mnt/c"
 
 // Resolve picks the config to LOAD: explicit flag, environment, the OS
-// default, and — on WSL — the Windows-side %APPDATA% config when it
+// default, and on WSL the Windows-side %APPDATA% config when it
 // exists, so one file can drive both the Windows tray and a WSL daemon.
 // The second return says which rule matched ("flag", "env", "default",
 // "windows-shared", "").

@@ -45,7 +45,7 @@ func Bytes(severity string, size int) []byte {
 }
 
 // BytesHollow returns the severity color as a ring over a white halo on a
-// transparent background — the "off" phase of the attention blink.
+// transparent background: the "off" phase of the attention blink.
 func BytesHollow(severity string, size int) []byte {
 	return render(ringPixel, Color(severity), size)
 }
@@ -124,7 +124,7 @@ func pngFrom(pixel pixelFn, c RGB, size int) []byte {
 }
 
 // circlePixel composes a colored disc over a slightly larger white halo,
-// both antialiased, over transparency — visible on light and dark trays.
+// both antialiased, over transparency; visible on light and dark trays.
 func circlePixel(c RGB, size, x, y int) (uint8, uint8, uint8, uint8) {
 	d := dist(size, x, y)
 	discR := center(size) - 3.0
@@ -137,7 +137,7 @@ func circlePixel(c RGB, size, x, y int) (uint8, uint8, uint8, uint8) {
 }
 
 // ringPixel composes a severity-colored ring (3px band) over the same
-// white halo — reads as an "off" phase next to the filled disc.
+// white halo; reads as an "off" phase next to the filled disc.
 func ringPixel(c RGB, size, x, y int) (uint8, uint8, uint8, uint8) {
 	d := dist(size, x, y)
 	r := center(size) - 3.0

@@ -31,7 +31,7 @@ import (
 // version is sourced from buildinfo (injected at build time).
 func version() string { return buildinfo.Version }
 
-const usage = `agent-notify — tray notifier for AI coding agents (herdr today)
+const usage = `agent-notify: tray notifier for AI coding agents (herdr today)
 
 Usage:
   agent-notify [flags] [command]
@@ -454,7 +454,7 @@ func updateEvent(latest string) event.Event {
 		Kind:    event.KindUpdateAvail,
 		Time:    time.Now(),
 		Session: "agent-notify",
-		Title:   "v" + latest + " available — tray menu → Update & restart",
+		Title:   "v" + latest + " available: tray menu → Update & restart",
 	}
 }
 
@@ -463,7 +463,7 @@ func setupNudgeEvent() event.Event {
 		Kind:    event.KindSetup,
 		Time:    time.Now(),
 		Session: "agent-notify",
-		Title:   "agent-notify isn't set up yet — tray menu → Set up agent-notify…",
+		Title:   "agent-notify isn't set up yet: tray menu → Set up agent-notify…",
 	}
 }
 
@@ -676,7 +676,7 @@ func cmdTest(configPath string, stdout io.Writer, log *slog.Logger) int {
 		return 1
 	}
 	// withTray: the tray sink's Deliver forwards to its popup, which works
-	// headless — testing it shows exactly what the tray would fire.
+	// headless, so testing it shows exactly what the tray would fire.
 	sinks, err := buildSinks(cfg, eng, log, true)
 	if err != nil {
 		fmt.Fprintf(stdout, "invalid sink configuration: %v\n", err)
@@ -788,7 +788,7 @@ func cmdUpdate(args []string, stdout io.Writer, log *slog.Logger) int {
 		fmt.Fprintf(stdout, "update failed: %v\n", err)
 		return 1
 	}
-	fmt.Fprintf(stdout, "updated to %s — restart agent-notify to apply\n", st.Latest)
+	fmt.Fprintf(stdout, "updated to %s; restart agent-notify to apply\n", st.Latest)
 	return 0
 }
 
@@ -836,7 +836,7 @@ func cmdConfig(configPath string, args []string, stdout io.Writer, log *slog.Log
 	case "validate":
 		p, _ := config.Resolve(configPath)
 		if p == "" || !fileExists(p) {
-			fmt.Fprintln(stdout, "config: none found (defaults in effect) — ok")
+			fmt.Fprintln(stdout, "config: none found (defaults in effect); ok")
 			return 0
 		}
 		if _, warnings, err := config.Load(p); err != nil {
@@ -847,7 +847,7 @@ func cmdConfig(configPath string, args []string, stdout io.Writer, log *slog.Log
 				fmt.Fprintf(stdout, "warning: %s\n", w)
 			}
 		}
-		fmt.Fprintf(stdout, "%s — ok\n", p)
+		fmt.Fprintf(stdout, "%s: ok\n", p)
 	default:
 		fmt.Fprintf(stdout, "unknown config subcommand %q (path|edit|validate)\n", sub)
 		return 2

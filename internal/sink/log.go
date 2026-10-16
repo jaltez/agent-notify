@@ -10,7 +10,7 @@ import (
 	"github.com/jaltez/agent-notify/internal/event"
 )
 
-// Log prints one line per event to a writer — stdout for `monitor`,
+// Log prints one line per event to a writer: stdout for `monitor`,
 // stderr as a config sink.
 type Log struct {
 	W    io.Writer

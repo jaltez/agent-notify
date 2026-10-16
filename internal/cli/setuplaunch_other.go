@@ -23,7 +23,7 @@ var termLaunchers = []struct {
 	{"xterm", []string{"-e"}},
 }
 
-// launchSetupWizard opens a terminal running `setup`. Best effort —
+// launchSetupWizard opens a terminal running `setup`. Best effort:
 // there is no single API for spawning terminals on Linux desktops; when
 // nothing is found the caller falls back to a toast pointing at the
 // command.

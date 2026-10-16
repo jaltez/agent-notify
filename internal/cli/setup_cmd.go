@@ -1,4 +1,4 @@
-// `agent-notify setup` — the first-run wizard. It walks a freshly
+// `agent-notify setup` is the first-run wizard. It walks a freshly
 // downloaded binary through deploying itself: canonical install
 // location, PATH, login autostart or the systemd service, the WSL daemon
 // on Windows, config, and a test notification. `agent-notify uninstall`
@@ -52,7 +52,7 @@ func cmdSetup(configPath string, args []string, stdout, stderr io.Writer, log *s
 	}
 	w := &wizard{in: bufio.NewReader(os.Stdin), out: stdout, yes: *yes}
 
-	// 1 — install the binary into its canonical home
+	// 1: install the binary into its canonical home
 	stopped := false
 	installedNow := false
 	switch {
@@ -77,7 +77,7 @@ func cmdSetup(configPath string, args []string, stdout, stderr io.Writer, log *s
 		fmt.Fprintln(stdout, "setup: keeping the binary where it is (portable mode)")
 	}
 
-	// 2 — PATH
+	// 2: PATH
 	pathFixed := false
 	if st.Installed && !st.PathOK && w.confirm("Add "+st.InstallDir+" to your PATH?", true) {
 		if err := setup.EnsurePATH(); err != nil {
@@ -92,7 +92,7 @@ func cmdSetup(configPath string, args []string, stdout, stderr io.Writer, log *s
 		}
 	}
 
-	// 3 — residency: start at login
+	// 3: residency (start at login)
 	if *noAutostart {
 		fmt.Fprintln(stdout, "setup: autostart skipped (--no-autostart)")
 	} else if runtime.GOOS == "windows" {
@@ -138,7 +138,7 @@ func cmdSetup(configPath string, args []string, stdout, stderr io.Writer, log *s
 		}
 	}
 
-	// 4 — WSL daemon (Windows hosts)
+	// 4: WSL daemon (Windows hosts)
 	if runtime.GOOS == "windows" {
 		runWSL := func() {
 			fmt.Fprintln(stdout, "setup: installing the WSL daemon (this takes a moment)…")
@@ -155,7 +155,7 @@ func cmdSetup(configPath string, args []string, stdout, stderr io.Writer, log *s
 		}
 	}
 
-	// 5 — bring the tray back up if the install replaced it
+	// 5: bring the tray back up if the install replaced it
 	if stopped && w.confirm("Start agent-notify now?", true) {
 		if err := setup.StartInstalled(); err != nil {
 			fmt.Fprintf(stdout, "setup: could not start: %v\n", err)
@@ -164,7 +164,7 @@ func cmdSetup(configPath string, args []string, stdout, stderr io.Writer, log *s
 		}
 	}
 
-	// 6 — config and a test popup
+	// 6: config and a test popup
 	p := config.Path(configPath)
 	switch {
 	case p == "":
@@ -182,7 +182,7 @@ func cmdSetup(configPath string, args []string, stdout, stderr io.Writer, log *s
 		cmdTest(configPath, stdout, log)
 	}
 
-	// 7 — summary
+	// 7: summary
 	fmt.Fprintln(stdout)
 	st = setup.Detect()
 	if installedNow {
@@ -192,7 +192,7 @@ func cmdSetup(configPath string, args []string, stdout, stderr io.Writer, log *s
 		st.PathOK = true // the live process PATH can't show it yet
 	}
 	printStatusLines(stdout, st)
-	fmt.Fprintln(stdout, "setup: done — updates arrive automatically (daily check, `agent-notify update` to force)")
+	fmt.Fprintln(stdout, "setup: done; updates arrive automatically (daily check, `agent-notify update` to force)")
 	fmt.Fprintln(stdout, "setup: everything is reversible with `agent-notify uninstall`")
 	return 0
 }

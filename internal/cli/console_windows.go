@@ -17,7 +17,7 @@ var procGetStdHandle = kernel32.NewProc("GetStdHandle")
 // attachParentConsole lets a windowsgui-subsystem binary print to the
 // terminal it was launched from (agent-notify probe/test/... from cmd or
 // PowerShell). A windowless launch (Explorer double-click) has no parent
-// console and the call fails silently — the tray starts with no window.
+// console and the call fails silently; the tray starts with no window.
 // Under WSL interop the std pipes are inherited directly and the call is
 // simply a no-op.
 func attachParentConsole() {

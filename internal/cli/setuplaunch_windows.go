@@ -10,7 +10,7 @@ import (
 )
 
 // launchSetupWizard opens the setup wizard in a fresh console window via
-// the console twin — the tray exe is windowsgui and has no window to
+// the console twin: the tray exe is windowsgui and has no window to
 // host an interactive prompt. cmd's `start` returns immediately; the
 // marker env makes the wizard hold its window open when it finishes.
 func launchSetupWizard() error {

@@ -1,6 +1,6 @@
 // Package setup implements agent-notify's self-installation: detecting
 // how the binary is currently deployed and moving it to the canonical
-// per-user location, with OS-appropriate autostart — a Startup shortcut
+// per-user location, with OS-appropriate autostart: a Startup shortcut
 // on Windows, XDG autostart on Linux desktops, a systemd user service for
 // headless runs. Every action is idempotent; `agent-notify setup` is
 // always safe to re-run.
@@ -38,8 +38,8 @@ type Status struct {
 	ConfigExists   bool
 }
 
-// Detect gathers the current state. It is cheap — filesystem and
-// environment only, no network — so the tray can call it at startup.
+// Detect gathers the current state. It is cheap (filesystem and
+// environment only, no network), so the tray can call it at startup.
 func Detect() Status {
 	st := Status{Version: buildinfo.Version, Exe: selfExe()}
 	if dir, err := platformInstallDir(); err == nil && dir != "" {
@@ -114,7 +114,7 @@ func (s Status) Lines() [][2]string {
 	} else {
 		rows = append(rows, [2]string{"service", "n/a (no systemd)"})
 	}
-	cfg := s.ConfigPath + " — missing"
+	cfg := s.ConfigPath + " (missing)"
 	if s.ConfigExists {
 		cfg = s.ConfigPath
 	}
@@ -124,8 +124,8 @@ func (s Status) Lines() [][2]string {
 
 // Install copies the running binary (and, on Windows, its console twin
 // when shipped alongside) into the canonical install directory. A tray or
-// daemon already running from the target is stopped first — Windows locks
-// a running exe — and restarted by the caller if it wants; the return
+// daemon already running from the target is stopped first (Windows
+// locks a running exe) and restarted by the caller if it wants; the return
 // says whether anything was stopped.
 func Install() (stopped bool, err error) {
 	exe := selfExe()
@@ -140,7 +140,7 @@ func Install() (stopped bool, err error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return stopped, err
 	}
-	// Canonical name, even when the download was renamed — autostart,
+	// Canonical name, even when the download was renamed: autostart,
 	// the service unit and the upgrader all expect agent-notify[.exe].
 	dstName := installExeName()
 	if runtime.GOOS == "windows" && filepath.Base(exe) == consoleExeName() {
@@ -187,7 +187,7 @@ func EnsureService() error {
 func EnableLinger() error { return platformEnableLinger() }
 
 // Uninstall reverses setup: stops and removes the service and autostart,
-// deletes the installed binaries, and — with purgeConfig — the config
+// deletes the installed binaries, and with purgeConfig the config
 // file. It returns human-readable notes about what was done and what was
 // deliberately left behind.
 func Uninstall(purgeConfig bool, configFlag string) ([]string, error) {
@@ -270,7 +270,7 @@ func consoleExeName() string {
 	return ""
 }
 
-// siblingExes lists shipped companions to copy alongside the binary —
+// siblingExes lists shipped companions to copy alongside the binary:
 // the console twin on Windows (the tray menu's wizard window).
 func siblingExes(exe string) []string {
 	if runtime.GOOS != "windows" {
