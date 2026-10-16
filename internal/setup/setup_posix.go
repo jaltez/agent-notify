@@ -16,8 +16,7 @@ import (
 )
 
 // unitTemplate is rendered with the installed binary path by
-// EnsureService. Keep in sync with contrib/agent-notify.service (the
-// manually-installable copy).
+// EnsureService.
 //
 //go:embed agent-notify.service
 var unitTemplate string
@@ -160,8 +159,8 @@ func platformPathOK(dir string) bool {
 	return false
 }
 
-// platformAddToPath appends a marked export to ~/.profile — the least
-// surprising user shell file — only when the directory isn't already
+// platformAddToPath appends a marked export to ~/.profile, the least
+// surprising user shell file, only when the directory isn't already
 // exported there.
 func platformAddToPath(dir string) error {
 	home, err := os.UserHomeDir()

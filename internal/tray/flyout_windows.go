@@ -21,7 +21,7 @@ import (
 // click: fleet summary, one block per herdr space, one row per agent.
 // It hides itself when deactivated (click outside), on Escape, and after
 // autoCloseDelay. It lives on the systray message thread and paints with
-// GDI — no extra processes, no console windows.
+// GDI; no extra processes, no console windows.
 //
 // The engine view is read on the UI thread inside WM_PAINT; engine.View()
 // takes a short-held mutex, so this is safe.
@@ -166,7 +166,7 @@ var currentFly *flyout
 func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintptr) {
 	// A panic here would take the whole tray process down (the callback
 	// crosses the Win32 boundary); degrade to a visual glitch instead,
-	// but remember it — a silent blank window is miserable to debug.
+	// but remember it: a silent blank window is miserable to debug.
 	defer func() {
 		if r := recover(); r != nil {
 			currentFly.mu.Lock()
@@ -178,7 +178,7 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintp
 	f := currentFly
 	if f == nil {
 		// messages during window creation arrive before the instance
-		// is wired up — WM_NCCREATE must reach DefWindowProc
+		// is wired up; WM_NCCREATE must reach DefWindowProc
 		ret, _, _ := procDefWindowProcW.Call(uintptr(hwnd), uintptr(msg), wParam, lParam)
 		return ret
 	}
@@ -192,7 +192,7 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintp
 		}
 		return 0
 	case 0x0006: // WM_ACTIVATE
-		if uint16(wParam) == 0 { // WA_INACTIVE — click landed outside
+		if uint16(wParam) == 0 { // WA_INACTIVE (click landed outside)
 			if f.activated {
 				f.activated = false
 				f.hide()
@@ -202,7 +202,7 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintp
 		}
 		if uint16(wParam) == 0 && time.Since(f.shownAt) < activateGrace {
 			// activation was yanked during startup (another window held
-			// foreground); keep the panel up — a real tray click grants
+			// foreground); keep the panel up, as a real tray click grants
 			// foreground and click-outside still dismisses afterwards
 			f.activated = false
 			return 0
@@ -459,7 +459,7 @@ func (f *flyout) rows() []flyRow {
 		{dot: 0, text: v.Summary(), dim: true},
 	}
 	if len(v.Sessions) == 0 {
-		rows = append(rows, flyRow{dot: 0, text: "No herdr sessions seen yet — start a herdr session", dim: true})
+		rows = append(rows, flyRow{dot: 0, text: "No herdr sessions seen yet; start a herdr session", dim: true})
 		return rows
 	}
 	for _, s := range v.Sessions {
@@ -483,7 +483,7 @@ func (f *flyout) rows() []flyRow {
 				}
 			}
 			rows = append(rows, flyRow{
-				dot:  colorRef(icon.Color(a.Status)),
+				dot:  colorRef(icon.Color(engine.RowSeverity(a.Status, a.Wants))),
 				text: orDash(title), // line 1: what it is doing
 				sub:  info,          // line 2: runner · project, dim
 			})
@@ -721,8 +721,8 @@ func createFont(height, weight int32) windows.Handle {
 type Flyout = flyout
 
 // SelfTest drives the show/hide cycle, pumping messages like the real
-// tray does, and prints full window state — deterministic verification
-// without an interactive click.
+// tray does, and prints full window state (deterministic verification
+// without an interactive click).
 func (f *flyout) SelfTest() {
 	if f.hwnd == 0 {
 		fmt.Println("flytest: no window")

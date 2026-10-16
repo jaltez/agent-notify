@@ -1,7 +1,7 @@
 # agent-notify systemd user unit, rendered by `agent-notify setup --service`
-# (ExecStart is the installed binary). Keep in sync with contrib/agent-notify.service.
+# (ExecStart is the installed binary).
 [Unit]
-Description=agent-notify — herdr agent event notifier (headless)
+Description=agent-notify: herdr agent event notifier (headless)
 
 [Service]
 Type=simple
