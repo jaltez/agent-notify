@@ -30,14 +30,14 @@ const (
 	autoCloseDelay = 8 * time.Second
 	refreshEvery   = time.Second
 
-	sectionH      = 24
-	rowH          = 21 // summary / single-line rows
-	sepAfterSum   = 8
+	sectionH      = 30
+	rowH          = 24 // summary / single-line rows
+	sepAfterSum   = 12
 	titleH        = 20 // agent block: line 1 (title)
 	infoH         = 16 // agent block: line 2 (agent · project)
-	blockGap      = 5
+	blockGap      = 9
 	agentBlockH   = titleH + infoH + blockGap
-	wheelStep     = 42 // px per wheel notch
+	wheelStep     = 48 // px per wheel notch
 	activateGrace = 600 * time.Millisecond
 	flyClassName  = "agent-notify-flyout"
 
