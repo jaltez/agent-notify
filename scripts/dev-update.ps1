@@ -16,20 +16,17 @@
     powershell -NoProfile -ExecutionPolicy Bypass -File scripts/dev-update.ps1 -WslDistro Debian
 #>
 param(
-    # WSL distro holding the checkout.
-    [string]$WslDistro = 'Ubuntu',
-    # Checkout path inside the distro.
-    [string]$RepoPath = '~/projects/agent-notify',
-    # Explicit source exe; skips wslpath resolution.
+    # Explicit source exe; defaults to the checkout this script lives in.
     [string]$Source,
     # Fallback directory when no running process reveals its location.
     [string]$TargetDir = 'S:\standalone\autostart'
 )
 $ErrorActionPreference = 'Stop'
 
+# The script runs straight from the WSL checkout, so the binary is one
+# directory up: \\wsl.localhost\<distro>\<repo>\scripts\..\bin
 if (-not $Source) {
-    $Source = (wsl.exe -d $WslDistro -- sh -lc "wslpath -w $RepoPath/bin/agent-notify.exe" |
-        ForEach-Object { $_.Trim() } | Select-Object -First 1)
+    $Source = Join-Path (Split-Path $PSScriptRoot) 'bin\agent-notify.exe'
 }
 if (-not $Source -or -not (Test-Path $Source)) {
     throw "source binary not found: '$Source' (build it first: make build in WSL)"
@@ -51,7 +48,7 @@ try {
     Copy-Item $Source $target -Force -ErrorAction Stop
 } catch {
     Write-Host "dev-update: write denied ($($_.Exception.Message)); relaunching elevated..."
-    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -WslDistro `"$WslDistro`" -RepoPath `"$RepoPath`" -Source `"$Source`" -TargetDir `"$TargetDir`""
+    $argList = "-NoProfile -ExecutionPolicy Bypass -File `"$PSCommandPath`" -Source `"$Source`" -TargetDir `"$TargetDir`""
     Start-Process powershell -Verb RunAs -ArgumentList $argList -Wait
     exit 0
 }
