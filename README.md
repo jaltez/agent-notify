@@ -34,14 +34,14 @@ idle, or gets blocked. Otherwise it stays out of the way.
   resolved. Entering 🟢 blinks for 2 minutes, then settles into a steady
   green.
 - **Left click → flyout panel**: fleet summary with a per-state bar;
-  every session always listed with live counts. Working, blocked, and
-  finished agents show as full rows (status dot, runner · project,
-  current title, colored wash); resting agents collapse into one
-  `▸ N resting` line per session — click a session header or the
-  resting line to toggle. Expanded resting agents render as compact
-  single lines. Refreshed every second; mouse wheel scrolls when
-  needed; auto-close (8 s) only applies while everything fits;
-  outside click / Escape always dismiss.
+  every session always listed with live counts. Working and blocked
+  agents show as full rows (status dot, runner · project, current
+  title, colored wash); finished (green) and resting agents each
+  collapse into one `▸ N finished` / `▸ N resting` line per session;
+  click a session header or a group line to toggle. Opened groups list
+  their agents as compact single lines. Refreshed every second; mouse
+  wheel scrolls when needed; auto-close (8 s) only applies while
+  everything fits; outside click / Escape always dismiss.
 - **Right click → menu**: same information as a native menu (the only UI
   on Linux/macOS).
 - **Popups**: Windows toasts (or notify-send) when an agent needs

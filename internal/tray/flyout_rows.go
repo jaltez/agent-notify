@@ -24,8 +24,8 @@ const (
 	rowSummarySub                  // counts line with the fleet state bar
 	rowSession                     // session header: chevron + counts, click toggles
 	rowAgent                       // two-line attention block (dot + status wash)
-	rowAgentCompact                // one resting agent on a single line
-	rowResting                     // "N resting" line, click toggles a session's resting rows
+	rowAgentCompact                // one collapsed-group agent on a single line
+	rowGroup                       // "N finished"/"N resting" line, click toggles the group
 	rowEmpty                       // placeholder when nothing is known
 )
 
@@ -42,7 +42,7 @@ type flyRow struct {
 	text   string   // line 1 (agent blocks: the title)
 	sub    string   // line 2, agent blocks only (runner · project)
 	dim    bool     // paint in the dim color
-	toggle string   // session key this row toggles ("" = inert)
+	toggle string   // group key this row toggles ("" = inert)
 	open   bool     // effective open state, toggle rows only
 	bar    []barSeg // state bar segments, rowSummarySub only
 }
@@ -67,10 +67,12 @@ func orDash(s string) string {
 }
 
 // buildRows lays out the flyout for a view. Session headers are always
-// present; a session is expanded by default when it has attention agents
-// (anything not resting), otherwise collapsed. openState and restOpen hold
-// the user's click overrides; resting agents appear as single compact
-// lines only when their session is open and its resting group is open.
+// present; a session expands by default only when it has working or
+// blocked agents. Finished (green) and resting agents each collapse
+// into a single per-session line; opened groups list their agents as
+// compact single-line rows. openState and restOpen hold the user's
+// click overrides (session key, and group key "session/finished" or
+// "session/resting").
 func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 	rows := []flyRow{
 		{kind: rowSummary, dot: colorRef(icon.Color(v.Severity())), text: "agent-notify"},
@@ -82,15 +84,18 @@ func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 	}
 	for _, s := range v.Sessions {
 		key := s.Host + "/" + s.Name
-		var attention, resting []engine.AgentView
+		var active, finished, resting []engine.AgentView
 		for _, a := range s.Agents {
-			if engine.RowSeverity(a.Status, a.Wants) == "idle" {
+			switch engine.RowSeverity(a.Status, a.Wants) {
+			case "working", "blocked":
+				active = append(active, a)
+			case "waiting":
+				finished = append(finished, a)
+			default:
 				resting = append(resting, a)
-			} else {
-				attention = append(attention, a)
 			}
 		}
-		open := len(attention) > 0
+		open := len(active) > 0
 		if o, ok := openState[key]; ok {
 			open = o
 		}
@@ -100,15 +105,15 @@ func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 		}
 		rows = append(rows, flyRow{
 			kind:   rowSession,
-			text:   fmt.Sprintf("%s %s/%s — %d agent%s%s", chevron(open), s.Host, s.Name, len(s.Agents), pluralS(len(s.Agents)), tally(attention)+state),
-			dim:    len(attention) == 0,
+			text:   fmt.Sprintf("%s %s/%s — %d agent%s%s", chevron(open), s.Host, s.Name, len(s.Agents), pluralS(len(s.Agents)), tally(s.Agents)+state),
+			dim:    len(active) == 0,
 			toggle: key,
 			open:   open,
 		})
 		if !open {
 			continue
 		}
-		for _, a := range attention {
+		for _, a := range active {
 			title, info := a.Title, a.Name
 			if a.Project != "" {
 				if title == "" {
@@ -124,32 +129,41 @@ func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 				sub:  info,          // line 2: runner · project, dim
 			})
 		}
-		if len(resting) == 0 {
-			continue
+		rows = appendGroup(rows, key+"/finished", "finished", finished, "waiting", restOpen)
+		rows = appendGroup(rows, key+"/resting", "resting", resting, "idle", restOpen)
+	}
+	return rows
+}
+
+// appendGroup adds one collapsible group line and, when the group is
+// open, one compact row per agent (dot in the group's severity color).
+func appendGroup(rows []flyRow, key, label string, agents []engine.AgentView, sev string, open map[string]bool) []flyRow {
+	if len(agents) == 0 {
+		return rows
+	}
+	isOpen := open[key]
+	rows = append(rows, flyRow{
+		kind:   rowGroup,
+		dot:    colorRef(icon.Color(sev)),
+		text:   fmt.Sprintf("%s %d %s", chevron(isOpen), len(agents), label),
+		dim:    true,
+		toggle: key,
+		open:   isOpen,
+	})
+	if !isOpen {
+		return rows
+	}
+	for _, a := range agents {
+		title := a.Title
+		if title == "" {
+			title = a.Project
 		}
-		openRest := restOpen[key]
 		rows = append(rows, flyRow{
-			kind:   rowResting,
-			text:   fmt.Sprintf("%s %d resting", chevron(openRest), len(resting)),
-			dim:    true,
-			toggle: key,
-			open:   openRest,
+			kind: rowAgentCompact,
+			dot:  colorRef(icon.Color(sev)),
+			text: orDash(title),
+			dim:  true,
 		})
-		if !openRest {
-			continue
-		}
-		for _, a := range resting {
-			title := a.Title
-			if title == "" {
-				title = a.Project
-			}
-			rows = append(rows, flyRow{
-				kind: rowAgentCompact,
-				dot:  colorRef(icon.Color("idle")),
-				text: orDash(title),
-				dim:  true,
-			})
-		}
 	}
 	return rows
 }
@@ -162,12 +176,11 @@ func chevron(open bool) string {
 	return "▸"
 }
 
-// tally summarizes attention agents for a session header, e.g.
-// " · 1 working · 1 blocked"; danger first. Resting agents are not
-// counted here (the resting line shows them).
-func tally(attention []engine.AgentView) string {
+// tally summarizes a session's agents for its header, e.g.
+// " · 1 working · 1 blocked"; danger first.
+func tally(agents []engine.AgentView) string {
 	var blocked, working, waiting int
-	for _, a := range attention {
+	for _, a := range agents {
 		switch engine.RowSeverity(a.Status, a.Wants) {
 		case "blocked":
 			blocked++

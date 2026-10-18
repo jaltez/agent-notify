@@ -359,7 +359,7 @@ func (f *flyout) clickRow(lParam uintptr) {
 				f.openState = map[string]bool{}
 			}
 			f.openState[r.toggle] = !r.open
-		case rowResting:
+		case rowGroup:
 			if f.restOpen == nil {
 				f.restOpen = map[string]bool{}
 			}
