@@ -14,7 +14,6 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/jaltez/agent-notify/internal/engine"
-	"github.com/jaltez/agent-notify/internal/icon"
 )
 
 // A small always-on-top flyout panel shown next to the tray on left
@@ -30,8 +29,6 @@ const (
 	autoCloseDelay = 8 * time.Second
 	refreshEvery   = time.Second
 
-	flyWidth      = 420
-	flyPad        = 14
 	sectionH      = 24
 	rowH          = 21 // summary / single-line rows
 	sepAfterSum   = 8
@@ -39,7 +36,6 @@ const (
 	infoH         = 16 // agent block: line 2 (agent · project)
 	blockGap      = 5
 	agentBlockH   = titleH + infoH + blockGap
-	maxFitBlocks  = 10 // agent blocks before scrolling
 	wheelStep     = 42 // px per wheel notch
 	activateGrace = 600 * time.Millisecond
 	flyClassName  = "agent-notify-flyout"
@@ -146,7 +142,11 @@ type flyout struct {
 	tracking bool
 	lastRows []flyRow
 	lastGeom []rowGeom
-	shownAt  time.Time // grace period before deactivate-dismiss applies
+	// collapse state (window thread): session key -> user override;
+	// defaults live in buildRows
+	openState map[string]bool
+	restOpen  map[string]bool
+	shownAt   time.Time // grace period before deactivate-dismiss applies
 	// diagnostics, touched from the window thread (and flytest)
 	paintPanics int
 	lastPanic   string
@@ -218,6 +218,9 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintp
 		return 0
 	case 0x0200: // WM_MOUSEMOVE
 		f.trackHover(uintptr(lParam))
+		return 0
+	case 0x0202: // WM_LBUTTONUP
+		f.clickRow(uintptr(lParam))
 		return 0
 	case 0x02A3: // WM_MOUSELEAVE
 		if f.hoverSet {
@@ -335,6 +338,38 @@ func (f *flyout) trackHover(lParam uintptr) {
 	}
 }
 
+// clickRow activates a clicked row: session headers and resting lines
+// toggle their group; agent rows are display-only today.
+func (f *flyout) clickRow(lParam uintptr) {
+	if !f.visible || len(f.lastGeom) == 0 {
+		return
+	}
+	my := int32(int16(uint32(lParam) >> 16))
+	for i, g := range f.lastGeom {
+		if my < g.y || my >= g.y+g.h {
+			continue
+		}
+		r := f.lastRows[i]
+		if r.toggle == "" {
+			return
+		}
+		switch r.kind {
+		case rowSession:
+			if f.openState == nil {
+				f.openState = map[string]bool{}
+			}
+			f.openState[r.toggle] = !r.open
+		case rowResting:
+			if f.restOpen == nil {
+				f.restOpen = map[string]bool{}
+			}
+			f.restOpen[r.toggle] = !r.open
+		}
+		procInvalidateRect.Call(uintptr(f.hwnd), 0, 1)
+		return
+	}
+}
+
 // toggle shows or hides the panel (tray left click).
 func (f *flyout) toggle() {
 	f.debugf("flyout toggle: visible=%v", f.visible)
@@ -430,11 +465,6 @@ func procShowWindowCall(hwnd windows.HWND, cmd int32) {
 	procShowWindow.Call(uintptr(hwnd), uintptr(uint32(cmd)))
 }
 
-// colorRef renders an icon color in Windows COLORREF (BGR) layout.
-func colorRef(c icon.RGB) uint32 {
-	return uint32(c.R) | uint32(c.G)<<8 | uint32(c.B)<<16
-}
-
 // notify asks for a repaint from any goroutine (thread-safe post).
 func (f *flyout) notify() {
 	procPostMessageW.Call(uintptr(f.hwnd), wmAppRefresh, 0, 0)
@@ -444,86 +474,35 @@ type rowGeom struct {
 	y, h int32
 }
 
-type flyRow struct {
-	dot  uint32 // COLORREF; 0 = no dot
-	sub  string // secondary run (agent name), drawn dim in its own column
-	text string
-	bold bool
-	dim  bool
+// rows lays out the panel from the live view plus the user's collapse
+// overrides. The model itself (buildRows, flyout_rows.go) is
+// platform-neutral and unit tested; this only wires it to the engine.
+func (f *flyout) rows() []flyRow {
+	return buildRows(f.eng.View(), f.openState, f.restOpen)
 }
 
-func (f *flyout) rows() []flyRow {
-	v := f.eng.View()
-	rows := []flyRow{
-		{dot: colorRef(icon.Color(v.Severity())), text: "agent-notify", bold: true},
-		{dot: 0, text: v.Summary(), dim: true},
+// rowHeight returns the painted height of one row.
+func rowHeight(r flyRow, blockH int32) int32 {
+	switch r.kind {
+	case rowSession:
+		return sectionH
+	case rowAgent:
+		return blockH
 	}
-	if len(v.Sessions) == 0 {
-		rows = append(rows, flyRow{dot: 0, text: "No herdr sessions seen yet; start a herdr session", dim: true})
-		return rows
-	}
-	for _, s := range v.Sessions {
-		state := ""
-		if !s.Up {
-			state = " · offline"
-		}
-		rows = append(rows, flyRow{
-			dot:  0,
-			text: fmt.Sprintf("%s/%s — %d agent%s%s", s.Host, s.Name, len(s.Agents), pluralS(len(s.Agents)), state),
-			bold: true,
-		})
-		for _, a := range s.Agents {
-			title := a.Title
-			info := a.Name
-			if a.Project != "" {
-				if title == "" {
-					title = a.Project
-				} else {
-					info += " · " + a.Project
-				}
-			}
-			rows = append(rows, flyRow{
-				dot:  colorRef(icon.Color(engine.RowSeverity(a.Status, a.Wants))),
-				text: orDash(title), // line 1: what it is doing
-				sub:  info,          // line 2: runner · project, dim
-			})
-		}
-	}
-	return rows
+	return rowH
 }
 
 // rowsAndHeight returns the rows to paint and the matching panel height.
 func (f *flyout) rowsAndHeight() ([]flyRow, int32) {
 	rows := f.rows()
 	h := int32(flyPad)
-	for i, r := range rows {
-		rh := int32(rowH)
-		if r.bold {
-			rh = sectionH
+	for _, r := range rows {
+		h += rowHeight(r, f.agentBlockH())
+		if r.kind == rowSummarySub {
+			h += sepAfterSum
 		}
-		if r.sub != "" {
-			rh = f.agentBlockH()
-		}
-		if i == 1 {
-			rh += sepAfterSum
-		}
-		h += rh
 	}
 	return rows, h + flyPad
-}
-
-func pluralS(n int) string {
-	if n == 1 {
-		return ""
-	}
-	return "s"
-}
-
-func orDash(s string) string {
-	if s == "" {
-		return "—"
-	}
-	return s
 }
 
 func (f *flyout) paint(hwnd windows.HWND) {
@@ -565,13 +544,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	f.lastGeom = f.lastGeom[:0]
 	y := int32(flyPad) - f.scroll
 	for i, r := range rows {
-		rh := int32(rowH)
-		if r.bold {
-			rh = sectionH
-		}
-		if r.sub != "" {
-			rh = f.agentBlockH() // two-line agent block
-		}
+		rh := rowHeight(r, f.agentBlockH())
 		f.lastGeom = append(f.lastGeom, rowGeom{y: y + f.scroll, h: rh})
 
 		hovered := f.hoverSet && f.hover == int32(i)
@@ -579,7 +552,8 @@ func (f *flyout) paint(hwnd windows.HWND) {
 			x := int32(flyPad)
 			w := int32(flyWidth - flyPad*2)
 
-			if r.sub != "" {
+			switch {
+			case r.kind == rowAgent:
 				// whole-block wash: status color blended over the panel
 				tint := blendColor(r.dot, 0.16, hovered)
 				rgn, _, _ := procCreateRoundRectRgn.Call(
@@ -588,32 +562,51 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				procFillRgn.Call(hdc, rgn, tbrush)
 				procDeleteObject.Call(tbrush)
 				procDeleteObject.Call(rgn)
-			} else if hovered {
+			case hovered:
 				hb, _, _ := procCreateSolidBrush.Call(uintptr(hoverColor()))
 				hoverRect := RECT{x - 6, y, x + w + 6, y + rh - 2}
 				procFillRect.Call(hdc, uintptr(unsafe.Pointer(&hoverRect)), hb)
 				procDeleteObject.Call(hb)
 			}
 
+			if r.kind == rowSummarySub && len(r.bar) > 0 {
+				// fleet state bar: one segment per agent state
+				bx := x
+				for _, seg := range r.bar {
+					brush, _, _ := procCreateSolidBrush.Call(uintptr(seg.col))
+					bar := RECT{bx, y + rowH - 4, bx + seg.px, y + rowH - 1}
+					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&bar)), brush)
+					procDeleteObject.Call(brush)
+					bx += seg.px
+				}
+			}
+
 			if r.dot != 0 {
 				brush, _, _ := procCreateSolidBrush.Call(uintptr(r.dot))
 				hold, _, _ := procSelectObject.Call(hdc, brush)
 				d := int32(9)
-				cy := y + titleH/2 // dot aligns with the title line
+				dy := y + rowH/2
+				if r.kind == rowAgent {
+					dy = y + titleH/2 // dot aligns with the title line
+				}
 				procEllipse.Call(hdc,
-					uintptr(x), uintptr(cy-d/2),
-					uintptr(x+d), uintptr(cy+d/2+1))
+					uintptr(x), uintptr(dy-d/2),
+					uintptr(x+d), uintptr(dy+d/2+1))
 				procSelectObject.Call(hdc, hold)
 				procDeleteObject.Call(brush)
 				x += 17
 				w -= 17
 			}
-			if r.sub != "" {
+			switch {
+			case r.kind == rowAgent:
 				// line 1: title; line 2: runner · project (dim, small)
-				f.drawText(hdc, r.text, x, y, w, titleH, r.bold, r.dim)
+				f.drawText(hdc, r.text, x, y, w, titleH, false, r.dim)
 				f.drawTextSmall(hdc, r.sub, x, y+titleH, w, infoH)
-			} else {
-				f.drawText(hdc, r.text, x, y, w, rh, r.bold, r.dim)
+			case r.kind == rowSummarySub:
+				// keep the line clear of the state bar drawn underneath
+				f.drawText(hdc, r.text, x, y, w, rowH-5, false, true)
+			default:
+				f.drawText(hdc, r.text, x, y, w, rh, r.kind == rowSession || r.kind == rowSummary, r.dim)
 			}
 		}
 		y += rh

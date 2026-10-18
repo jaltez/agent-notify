@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- **Flyout: resting agents collapse**: the panel no longer renders
+  every agent as a two-line block. Session headers stay visible with
+  live counts (`wsl/default — 15 agents · 1 working`); working,
+  blocked, and finished agents render as before; resting agents
+  collapse into one `▸ N resting` line per session (click again to
+  list them as compact single-line rows), and an all-resting session
+  collapses to its header. The summary line gained a segmented state
+  bar (blocked/offline/working/waiting/idle proportions). A 35-agent
+  fleet now paints ~350 px instead of ~1600 px, so the panel fits and
+  auto-close works again. Clicks on headers/resting lines toggle;
+  agent rows stay display-only. Row model moved to
+  `internal/tray/flyout_rows.go` (unit tested off-Windows).
 - **Docs: remote herdr sessions** (`docs/remote-sessions.md`): watch herdr
   on other hosts by `ssh -N -L` forwarding their sockets into
   `~/.config/herdr/sessions/<name>/` (nothing installed on the remote),

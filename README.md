@@ -33,12 +33,14 @@ idle, or gets blocked. Otherwise it stays out of the way.
   clears as soon as the agent starts working again. Blocked blinks until
   resolved. Entering 🟢 blinks for 2 minutes, then settles into a steady
   green.
-- **Left click → flyout panel**: fleet summary; spaces grouped by
-  priority (blocked first); every agent listed with status dot, dim
-  runner name, and current title; refreshed every second. Row wash
-  matches the icon: green = finished and waiting for you, gray =
-  resting, blue = working, red = blocked. Mouse wheel scrolls past
-  20 rows; auto-close (8 s) only applies while everything fits;
+- **Left click → flyout panel**: fleet summary with a per-state bar;
+  every session always listed with live counts. Working, blocked, and
+  finished agents show as full rows (status dot, runner · project,
+  current title, colored wash); resting agents collapse into one
+  `▸ N resting` line per session — click a session header or the
+  resting line to toggle. Expanded resting agents render as compact
+  single lines. Refreshed every second; mouse wheel scrolls when
+  needed; auto-close (8 s) only applies while everything fits;
   outside click / Escape always dismiss.
 - **Right click → menu**: same information as a native menu (the only UI
   on Linux/macOS).
