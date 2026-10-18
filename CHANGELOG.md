@@ -2,11 +2,11 @@
 
 ## Unreleased
 
-- **Flyout: click an agent to open its terminal**: agent rows (full
-  blocks and expanded compact rows) launch a Windows Terminal tab
-  running `herdr --session <name> agent attach <pane>`; WSL sessions
-  go through `wsl.exe` in the distro the engine polls, windows
-  sessions run `herdr.exe` directly. The panel hides on launch.
+- **Flyout: click an agent to focus it**: agent rows (full blocks
+  and expanded compact rows) run herdr's server-side `agent focus`,
+  so an already-open client jumps to that agent's workspace/tab/pane;
+  an existing window titled herdr is then raised. Nothing is opened,
+  and console helpers run hidden.
 - **Flyout: columnar layout**: sessions now flow side by side into as
   many columns as the work area allows (one per session when it fits;
   more sessions than columns balance greedily by height). Rows

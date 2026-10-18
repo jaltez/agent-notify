@@ -8,7 +8,9 @@ import (
 	"math"
 	"os"
 	"os/exec"
+	"strings"
 	"sync"
+	"syscall"
 	"time"
 	"unicode/utf16"
 	"unsafe"
@@ -101,6 +103,9 @@ var (
 	procSetTimer               = user32.NewProc("SetTimer")
 	procKillTimer              = user32.NewProc("KillTimer")
 	procShowWindow             = user32.NewProc("ShowWindow")
+	procEnumWindows            = user32.NewProc("EnumWindows")
+	procGetWindowTextW         = user32.NewProc("GetWindowTextW")
+	procIsWindowVisible        = user32.NewProc("IsWindowVisible")
 	procFrameRect              = user32.NewProc("FrameRect")
 	procGetModuleHandleW       = kernel32.NewProc("GetModuleHandleW")
 	procGetWindowLongPtrW      = user32.NewProc("GetWindowLongPtrW")
@@ -380,33 +385,64 @@ func (f *flyout) trackHover(lParam uintptr) {
 	}
 }
 
-// openAgent opens a Windows Terminal tab attached to the clicked
-// agent's terminal: `herdr --session <name> agent attach <pane>` on
-// the host that owns the session. WSL sessions run through wsl.exe in
-// the distro the engine polls; windows sessions run herdr.exe directly.
-func (f *flyout) openAgent(r flyRow) {
+// focusAgent focuses the clicked agent in an already-open client:
+// herdr's server-side `agent focus` moves any attached client to that
+// agent's workspace/tab/pane, then an existing window whose title
+// mentions herdr is raised. Nothing is opened or attached.
+func (f *flyout) focusAgent(r flyRow) {
 	f.hide()
 	var cmd *exec.Cmd
 	switch r.host {
 	case "windows":
-		cmd = exec.Command("wt.exe", "-w", "0", "new-tab", "--title", r.sess,
-			"herdr.exe", "--session", r.sess, "agent", "attach", r.pane)
+		cmd = exec.Command("herdr.exe", "--session", r.sess, "agent", "focus", r.pane)
 	default:
-		inner := fmt.Sprintf("exec herdr --session %s agent attach %s", r.sess, r.pane)
-		args := []string{"wt.exe", "-w", "0", "new-tab", "--title", r.sess, "wsl.exe"}
+		inner := fmt.Sprintf("exec herdr --session %s agent focus %s", r.sess, r.pane)
+		args := []string{"wsl.exe"}
 		if d := f.eng.WSLDistro(); d != "" {
 			args = append(args, "-d", d)
 		}
 		args = append(args, "--", "sh", "-lc", inner)
 		cmd = exec.Command(args[0], args[1:]...)
 	}
-	if err := cmd.Start(); err != nil {
-		f.debugf("openAgent %s/%s: %v", r.sess, r.pane, err)
+	// console children must not flash a window next to the tray
+	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
+	if err := cmd.Run(); err != nil {
+		f.debugf("focusAgent %s/%s: %v", r.sess, r.pane, err)
+	}
+	f.raiseHerdrWindow()
+}
+
+// raiseHerdrWindow brings an already-open herdr client window to the
+// front: first visible top-level window whose title mentions herdr.
+// Best effort; a client hidden behind other tabs is not findable here.
+func (f *flyout) raiseHerdrWindow() {
+	found := false
+	cb := windows.NewCallback(func(hwnd uintptr, _ uintptr) uintptr {
+		if found {
+			return 0
+		}
+		vis, _, _ := procIsWindowVisible.Call(hwnd)
+		if vis == 0 {
+			return 1
+		}
+		var buf [128]uint16
+		n, _, _ := procGetWindowTextW.Call(hwnd, uintptr(unsafe.Pointer(&buf[0])), 128)
+		if !strings.Contains(strings.ToLower(string(utf16.Decode(buf[:n]))), "herdr") {
+			return 1
+		}
+		procShowWindow.Call(hwnd, 9) // SW_RESTORE
+		procSetForegroundWindow.Call(hwnd)
+		found = true
+		return 0
+	})
+	procEnumWindows.Call(cb, 0)
+	if !found {
+		f.debugf("raiseHerdrWindow: no window titled herdr")
 	}
 }
 
-// clickRow activates a clicked row: agent rows open their terminal,
-// session headers and group lines toggle their group.
+// clickRow activates a clicked row: agent rows focus the agent in an
+// open client; session headers and group lines toggle their group.
 func (f *flyout) clickRow(lParam uintptr) {
 	if !f.visible || len(f.lastGeom) == 0 {
 		return
@@ -421,7 +457,7 @@ func (f *flyout) clickRow(lParam uintptr) {
 		r := f.lastRows[i]
 		if r.pane != "" {
 			// agent row: open a terminal attached to that agent
-			f.openAgent(r)
+			f.focusAgent(r)
 			return
 		}
 		if r.toggle == "" {
