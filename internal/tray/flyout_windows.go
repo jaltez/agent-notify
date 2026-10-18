@@ -27,11 +27,13 @@ import (
 // takes a short-held mutex, so this is safe.
 
 const (
-	autoCloseDelay = 8 * time.Second
+	autoCloseDelay = 30 * time.Second
 	refreshEvery   = time.Second
 
 	sectionH       = 34
 	rowH           = 24 // summary / single-line rows
+	rowTitleH      = 30 // "Agent Notify" line
+	rowSubH        = 34 // counts line + state bar
 	sepAfterSum    = 14
 	titleH         = 24 // agent block: line 1 (title)
 	infoH          = 18 // agent block: line 2 (agent · project)
@@ -61,6 +63,7 @@ var (
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
 	procRegisterClassExW      = user32.NewProc("RegisterClassExW")
+	procLoadCursorW           = user32.NewProc("LoadCursorW")
 	procCreateWindowExW       = user32.NewProc("CreateWindowExW")
 	procDefWindowProcW        = user32.NewProc("DefWindowProcW")
 	procSetWindowPos          = user32.NewProc("SetWindowPos")
@@ -141,6 +144,8 @@ type flyout struct {
 	hover    int32
 	hoverSet bool
 	tracking bool
+	mouseY   int32 // last cursor position, client coords
+	mouseSet bool
 	lastRows []flyRow
 	lastGeom []rowGeom
 	// collapse state (window thread): session key -> user override;
@@ -241,6 +246,12 @@ func flyWndProc(hwnd windows.HWND, msg uint32, wParam, lParam uintptr) (rc uintp
 	case 0x0113: // WM_TIMER
 		switch wParam {
 		case timerAutoclose:
+			if f.tracking || f.hoverSet {
+				// the user is reading the panel: re-arm instead of hiding
+				procSetTimer.Call(uintptr(f.hwnd), timerAutoclose,
+					uintptr(autoCloseDelay.Milliseconds()), 0)
+				return 0
+			}
 			f.hide()
 		case timerRefresh:
 			procInvalidateRect.Call(uintptr(f.hwnd), 0, 1)
@@ -266,10 +277,12 @@ func newFlyout(eng *engine.Engine, log *slog.Logger) (*flyout, error) {
 		return nil, err
 	}
 	cb := windows.NewCallback(flyWndProc)
+	arrow, _, _ := procLoadCursorW.Call(0, 32512) // IDC_ARROW
 	wc := WNDCLASSEX{
 		Size:      uint32(unsafe.Sizeof(WNDCLASSEX{})),
 		WndProc:   cb,
 		Instance:  windows.Handle(inst),
+		Cursor:    windows.Handle(arrow),
 		ClassName: cls,
 	}
 	if r, _, err2 := procRegisterClassExW.Call(uintptr(unsafe.Pointer(&wc))); r == 0 {
@@ -314,6 +327,8 @@ func (f *flyout) trackHover(lParam uintptr) {
 		return
 	}
 	my := int32(int16(uint32(lParam) >> 16))
+	f.mouseY = my
+	f.mouseSet = true
 	idx := int32(-1)
 	for i, g := range f.lastGeom {
 		if my >= g.y && my < g.y+g.h {
@@ -456,6 +471,9 @@ func (f *flyout) hide() {
 	procKillTimer.Call(uintptr(f.hwnd), timerRefresh)
 	procShowWindowCall(f.hwnd, 0) // SW_HIDE
 	f.visible = false
+	f.mouseSet = false
+	f.hoverSet = false
+	f.tracking = false
 }
 
 // drawTextHead draws a session header in the larger bold font.
@@ -519,6 +537,10 @@ func (f *flyout) rows() []flyRow {
 // rowHeight returns the painted height of one row.
 func rowHeight(r flyRow, blockH int32) int32 {
 	switch r.kind {
+	case rowSummary:
+		return rowTitleH
+	case rowSummarySub:
+		return rowSubH
 	case rowSession:
 		return sectionH
 	case rowAgent:
@@ -578,9 +600,29 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	f.lastRows = rows
 	f.lastGeom = f.lastGeom[:0]
 	y := int32(flyPad) - f.scroll
-	for i, r := range rows {
+	for _, r := range rows {
 		rh := rowHeight(r, f.agentBlockH())
 		f.lastGeom = append(f.lastGeom, rowGeom{y: y + f.scroll, h: rh})
+		y += rh
+	}
+	// rows rebuilt (refresh, collapse, scroll): re-hit-test the stored
+	// cursor position so the highlight always marks the row actually
+	// under the mouse, never a stale index
+	if f.mouseSet {
+		idx := int32(-1)
+		for i, g := range f.lastGeom {
+			if f.mouseY >= g.y && f.mouseY < g.y+g.h {
+				idx = int32(i)
+				break
+			}
+		}
+		f.hover = idx
+		f.hoverSet = idx >= 0
+	}
+	for i, r := range rows {
+		g := f.lastGeom[i]
+		rh := g.h
+		y := g.y - f.scroll
 
 		hovered := f.hoverSet && f.hover == int32(i)
 		if y+rh >= flyPad-2 && y <= clientH { // clip to the visible band
@@ -606,7 +648,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				// the washed rows they contain
 				if r.kind == rowSession {
 					bb, _, _ := procCreateSolidBrush.Call(uintptr(colorBand))
-					band := RECT{x - 8, y + 2, x + w + 8, y + rh - 2}
+					band := RECT{x - 8, y + 3, x + w + 8, y + rh - 3}
 					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&band)), bb)
 					procDeleteObject.Call(bb)
 				}
@@ -619,11 +661,12 @@ func (f *flyout) paint(hwnd windows.HWND) {
 			}
 
 			if r.kind == rowSummarySub && len(r.bar) > 0 {
-				// fleet state bar: one segment per agent state
+				// fleet state bar: one segment per agent state, a margin
+				// below the counts text and above the next row
 				bx := x
 				for _, seg := range r.bar {
 					brush, _, _ := procCreateSolidBrush.Call(uintptr(seg.col))
-					bar := RECT{bx, y + rowH - 4, bx + seg.px, y + rowH - 1}
+					bar := RECT{bx, y + rowH + 3, bx + seg.px, y + rowH + 7}
 					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&bar)), brush)
 					procDeleteObject.Call(brush)
 					bx += seg.px
@@ -654,8 +697,8 @@ func (f *flyout) paint(hwnd windows.HWND) {
 			case r.kind == rowSession:
 				f.drawTextHead(hdc, r.text, x, y, w, rh)
 			case r.kind == rowSummarySub:
-				// keep the line clear of the state bar drawn underneath
-				f.drawText(hdc, r.text, x, y, w, rowH-5, false, true)
+				// text on top, state bar further down with air around it
+				f.drawText(hdc, r.text, x, y, w, rowH-4, false, true)
 			default:
 				f.drawText(hdc, r.text, x, y, w, rh, r.kind == rowSummary, r.dim)
 			}
@@ -664,7 +707,6 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				f.drawTextRight(hdc, buildinfo.Version, x, y, w, rh)
 			}
 		}
-		y += rh
 	}
 	// scrollbar thumb when scrollable
 	if f.scrollable && f.contentH > clientH {

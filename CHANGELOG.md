@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- **Flyout: cursor, close, and layout polish**: the panel cursor was
+  whatever the previous window left (sometimes an hourglass) because
+  the window class registered no cursor; it is now an arrow. Auto-close
+  waits 30 s instead of 8 s and never fires while the pointer is over
+  the panel. The title reads "Agent Notify" in the large header font.
+  The state bar got margins above and below, and the hover highlight
+  re-hit-tests after refreshes, collapses, and scrolls, so it no
+  longer marks a row the pointer is not on.
 - **Flyout: build stamp and tofu fix**: the panel title row shows the
   running version (right-aligned, dim), so a stale binary is obvious
   at a glance. herdr titles carry nerd-font Private Use Area icons and
