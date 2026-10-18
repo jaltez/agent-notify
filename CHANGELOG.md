@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Flyout: build stamp and tofu fix**: the panel title row shows the
+  running version (right-aligned, dim), so a stale binary is obvious
+  at a glance. herdr titles increasingly carry emoji and symbols that
+  Segoe UI GDI drawing renders as boxes; those glyphs are now stripped
+  from row text (chevrons, accents, and CJK pass through).
 - **Flyout: finished and resting agents collapse**: the panel no
   longer renders every agent as a two-line block. Session headers stay
   visible with live counts (`wsl/default — 15 agents · 1 working`);

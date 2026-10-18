@@ -13,6 +13,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
+	"github.com/jaltez/agent-notify/internal/buildinfo"
 	"github.com/jaltez/agent-notify/internal/engine"
 )
 
@@ -455,6 +456,22 @@ func (f *flyout) hide() {
 	f.visible = false
 }
 
+// drawTextRight draws a small dim string right-aligned in its cell.
+func (f *flyout) drawTextRight(hdc uintptr, text string, x, y, w, h int32) {
+	procSelectObject.Call(hdc, uintptr(f.small))
+	procSetTextColor.Call(hdc, uintptr(colorDim))
+	p, _ := windows.UTF16PtrFromString(text)
+	const (
+		dtSingleLine = 0x0020
+		dtVCenter    = 0x0004
+		dtEndEllips  = 0x8000
+		dtRight      = 0x0002
+	)
+	rc := RECT{x, y, x + w, y + h}
+	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
+		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtVCenter|dtEndEllips|dtRight))
+}
+
 func (f *flyout) debugf(format string, args ...any) {
 	if f.log != nil {
 		f.log.Debug(fmt.Sprintf(format, args...))
@@ -607,6 +624,10 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				f.drawText(hdc, r.text, x, y, w, rowH-5, false, true)
 			default:
 				f.drawText(hdc, r.text, x, y, w, rh, r.kind == rowSession || r.kind == rowSummary, r.dim)
+			}
+			if r.kind == rowSummary && buildinfo.Version != "" && buildinfo.Version != "dev" {
+				// stamp the build so a stale binary is visible at a glance
+				f.drawTextRight(hdc, buildinfo.Version, x, y, w, rh)
 			}
 		}
 		y += rh
