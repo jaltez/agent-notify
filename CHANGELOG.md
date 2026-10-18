@@ -1,11 +1,13 @@
 # Changelog
 
+## Unreleased
+
 - **Flyout: click an agent to open its terminal**: agent rows (full
   blocks and expanded compact rows) launch a Windows Terminal tab
   running `herdr --session <name> agent attach <pane>`; WSL sessions
   go through `wsl.exe` in the distro the engine polls, windows
   sessions run `herdr.exe` directly. The panel hides on launch.
-- **Flyout: columnar layout**- **Flyout: columnar layout**: sessions now flow side by side into as
+- **Flyout: columnar layout**: sessions now flow side by side into as
   many columns as the work area allows (one per session when it fits;
   more sessions than columns balance greedily by height). Rows
   hit-test in two dimensions, which also ends the stale hover
