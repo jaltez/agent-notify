@@ -30,17 +30,16 @@ const (
 	autoCloseDelay = 8 * time.Second
 	refreshEvery   = time.Second
 
-	sectionH      = 30
-	rowH          = 24 // summary / single-line rows
-	sepAfterSum   = 12
-	titleH        = 20 // agent block: line 1 (title)
-	infoH         = 16 // agent block: line 2 (agent · project)
-	blockGap      = 9
-	agentBlockH   = titleH + infoH + blockGap
-	wheelStep     = 48 // px per wheel notch
-	activateGrace = 600 * time.Millisecond
-	flyClassName  = "agent-notify-flyout"
-
+	sectionH       = 30
+	rowH           = 24 // summary / single-line rows
+	sepAfterSum    = 12
+	titleH         = 24 // agent block: line 1 (title)
+	infoH          = 18 // agent block: line 2 (agent · project)
+	blockGap       = 10
+	agentBlockH    = titleH + infoH + blockGap
+	wheelStep      = 48 // px per wheel notch
+	activateGrace  = 600 * time.Millisecond
+	flyClassName   = "agent-notify-flyout"
 	wmAppToggle    = 0x8001 // WM_APP+1
 	wmAppRefresh   = 0x8002 // WM_APP+2
 	timerAutoclose = 1
@@ -51,6 +50,7 @@ const (
 const (
 	colorBG     = 0x00202020
 	colorBorder = 0x00453C3C
+	colorBand   = 0x002B2B2B // session header background
 	colorText   = 0x00F2F2F2
 	colorDim    = 0x00A0A0A0
 )
@@ -568,6 +568,10 @@ func (f *flyout) paint(hwnd windows.HWND) {
 		if y+rh >= flyPad-2 && y <= clientH { // clip to the visible band
 			x := int32(flyPad)
 			w := int32(flyWidth - flyPad*2)
+			if r.kind == rowGroup || r.kind == rowAgentCompact {
+				x += 14 // nested rows sit inside their session header
+				w -= 14
+			}
 
 			switch {
 			case r.kind == rowAgent:
@@ -579,11 +583,21 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				procFillRgn.Call(hdc, rgn, tbrush)
 				procDeleteObject.Call(tbrush)
 				procDeleteObject.Call(rgn)
-			case hovered:
-				hb, _, _ := procCreateSolidBrush.Call(uintptr(hoverColor()))
-				hoverRect := RECT{x - 6, y, x + w + 6, y + rh - 2}
-				procFillRect.Call(hdc, uintptr(unsafe.Pointer(&hoverRect)), hb)
-				procDeleteObject.Call(hb)
+			default:
+				// session headers get a band so collapsibles outweigh
+				// the washed rows they contain
+				if r.kind == rowSession {
+					bb, _, _ := procCreateSolidBrush.Call(uintptr(colorBand))
+					band := RECT{x - 8, y + 2, x + w + 8, y + rh - 2}
+					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&band)), bb)
+					procDeleteObject.Call(bb)
+				}
+				if hovered {
+					hb, _, _ := procCreateSolidBrush.Call(uintptr(hoverColor()))
+					hoverRect := RECT{x - 6, y, x + w + 6, y + rh - 2}
+					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&hoverRect)), hb)
+					procDeleteObject.Call(hb)
+				}
 			}
 
 			if r.kind == rowSummarySub && len(r.bar) > 0 {

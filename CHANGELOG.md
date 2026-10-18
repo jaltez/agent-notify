@@ -7,6 +7,11 @@
   at a glance. herdr titles carry nerd-font Private Use Area icons and
   emoji that Segoe UI GDI drawing renders as boxes; those glyphs are
   stripped from row text (chevrons, accents, and CJK pass through).
+- **Flyout: hierarchy and air**: agent blocks are taller with padding
+  inside their status wash; session headers get a background band and
+  nested rows (group lines, compact agents) indent under them, so
+  collapsibles read stronger than the rows they contain. Group lines
+  paint at normal weight.
 - **Flyout: finished and resting agents collapse**: the panel no
   longer renders every agent as a two-line block. Session headers stay
   visible with live counts (`wsl/default — 15 agents · 1 working`);

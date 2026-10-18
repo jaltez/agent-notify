@@ -170,7 +170,7 @@ func appendGroup(rows []flyRow, key, label string, agents []engine.AgentView, se
 		kind:   rowGroup,
 		dot:    colorRef(icon.Color(sev)),
 		text:   fmt.Sprintf("%s %d %s", chevron(isOpen), len(agents), label),
-		dim:    true,
+		dim:    false, // normal weight: collapsibles must outweigh their rows
 		toggle: key,
 		open:   isOpen,
 	})
