@@ -129,7 +129,8 @@ func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 		}
 		rows = append(rows, flyRow{
 			kind:   rowSession,
-			text:   fmt.Sprintf("%s %s/%s — %d agent%s%s", chevron(open), s.Host, s.Name, len(s.Agents), pluralS(len(s.Agents)), tally(s.Agents)+state),
+			text:   fmt.Sprintf("%s %s", chevron(open), s.Name),
+			sub:    fmt.Sprintf("%s · %d agent%s%s", s.Host, len(s.Agents), pluralS(len(s.Agents)), tally(s.Agents)+state),
 			dim:    len(active) == 0,
 			toggle: key,
 			open:   open,

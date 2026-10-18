@@ -67,14 +67,17 @@ func TestOnlyWorkingKeepsFullRows(t *testing.T) {
 	rows := buildRows(view(), nil, nil)
 	joined := strings.Join(texts(rows), "\n")
 	for _, want := range []string{
-		"▾ wsl/default — 4 agents · 1 working · 1 waiting",
+		"▾ default",
 		"Refine shapes",  // working block
 		"pi · Nervefall", // block second line
 		"▸ 1 finished",   // latched done collapses (green group)
 		"▸ 2 resting",    // idle + unlatched done
-		"▸ wsl/quiet — 2 agents",
-		"▸ wsl/justdone — 1 agent · 1 waiting", // finished-only session collapses
-		"▸ wsl/down — 1 agent · offline",
+		"▸ quiet",
+		"wsl · 2 agents",
+		"▸ justdone", // finished-only session collapses
+		"wsl · 1 agent · 1 waiting",
+		"▸ down",
+		"wsl · 1 agent · offline",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in:\n%s", want, joined)
