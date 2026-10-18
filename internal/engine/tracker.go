@@ -18,9 +18,10 @@ const downAfter = 3
 // diffs into events.
 type tracker struct {
 	host, name string
-	seen       bool // had at least one successful snapshot
-	up         bool // last fetch succeeded
-	fails      int  // consecutive failed fetches (hysteresis before down)
+	ref, home  string // session socket path and distro home, for CLI calls
+	seen       bool   // had at least one successful snapshot
+	up         bool   // last fetch succeeded
+	fails      int    // consecutive failed fetches (hysteresis before down)
 
 	agents map[string]herdr.Agent // keyed by PaneID
 	order  []string               // pane keys in last snapshot order (stable UI)

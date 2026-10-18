@@ -125,6 +125,26 @@ func (w *WSL) Fetch(ctx context.Context, s Session) (*Snapshot, error) {
 	return ParseSnapshot(out)
 }
 
+// WSLHerdrArgs returns the wsl.exe argument tail that runs a one-shot
+// herdr command against a discovered session socket, the same way the
+// wsl backend itself invokes herdr: no login shell, explicit PATH
+// (wsl.exe -e would drop ~/.local/bin), and HERDR_SOCKET_PATH to pick
+// the session. Without a socket ref it falls back to --session.
+func WSLHerdrArgs(ref, home string, extraPath []string, args ...string) []string {
+	if ref == "" || home == "" {
+		return append([]string{"-e", "herdr", "--session"}, args...)
+	}
+	path := strings.Join(defaultWSLPath, ":")
+	for _, p := range extraPath {
+		path += ":" + p
+	}
+	out := []string{"-e", "env",
+		"PATH=" + home + "/.local/bin:" + home + "/.cargo/bin:" + path,
+		"HERDR_SOCKET_PATH=" + ref,
+		"herdr"}
+	return append(out, args...)
+}
+
 func contains(ss []string, v string) bool {
 	for _, s := range ss {
 		if s == v {
