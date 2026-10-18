@@ -135,6 +135,12 @@ kinds, `"all"`, or `"none"`.
 One binary covers every placement: on Windows it sees Windows **and**
 WSL sessions; in WSL it sees local sockets **and** the Windows side.
 
+Remote hosts work too: forward the remote's herdr socket into
+`~/.config/herdr/sessions/<name>/herdr.sock` with `ssh -N -L` (OpenSSH
+forwards Unix sockets; nothing is installed on the remote) and it is
+auto-discovered as a session. Systemd template and caveats:
+[docs/remote-sessions.md](docs/remote-sessions.md).
+
 ## Configuration
 
 Zero config works. To customize:
