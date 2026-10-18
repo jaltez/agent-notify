@@ -5,9 +5,14 @@ VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 PKG := github.com/jaltez/agent-notify/internal/buildinfo
 LDFLAGS = -s -w -X $(PKG).Version=$(VERSION)
 
-.PHONY: build linux windows windows-console test fmt vet clean install release
+.PHONY: build linux windows windows-console test fmt vet clean install release dev-install
 
 build: linux windows windows-console
+
+# Build the Windows exe and install it over the running tray (asks for
+# elevation only if the destination denies the write).
+dev-install: windows
+	powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev-update.ps1
 
 # Local snapshot release (production releases come from the tag workflow
 # running goreleaser; see .goreleaser.yml).
