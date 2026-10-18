@@ -113,6 +113,10 @@ func New(cfg Config, opts ...Option) (*Engine, error) {
 	return e, nil
 }
 
+// WSLDistro returns the configured WSL distro for the wsl backend
+// ("" = wsl.exe's default distro).
+func (e *Engine) WSLDistro() string { return e.cfg.Herdr.WSL.Distro }
+
 // Backends lists the enabled backend names.
 func (e *Engine) Backends() []string {
 	out := make([]string, len(e.backends))

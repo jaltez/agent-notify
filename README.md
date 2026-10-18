@@ -38,7 +38,9 @@ idle, or gets blocked. Otherwise it stays out of the way.
   agents show as full rows (status dot, runner · project, current
   title, colored wash); finished (green) and resting agents each
   collapse into one `▸ N finished` / `▸ N resting` line per session;
-  click a session header or a group line to toggle. Opened groups list
+  click a session header or a group line to toggle. Clicking an agent
+  row opens a Windows Terminal tab attached to that agent (`herdr
+  agent attach`). Opened groups list
   their agents as compact single lines. Refreshed every second; mouse
   wheel scrolls when needed; auto-close (8 s) only applies while
   everything fits; outside click / Escape always dismiss.
