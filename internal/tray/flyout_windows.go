@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"math"
 	"os"
+	"os/exec"
 	"sync"
 	"time"
 	"unicode/utf16"
@@ -379,8 +380,33 @@ func (f *flyout) trackHover(lParam uintptr) {
 	}
 }
 
-// clickRow activates a clicked row: session headers and resting lines
-// toggle their group; agent rows are display-only today.
+// openAgent opens a Windows Terminal tab attached to the clicked
+// agent's terminal: `herdr --session <name> agent attach <pane>` on
+// the host that owns the session. WSL sessions run through wsl.exe in
+// the distro the engine polls; windows sessions run herdr.exe directly.
+func (f *flyout) openAgent(r flyRow) {
+	f.hide()
+	var cmd *exec.Cmd
+	switch r.host {
+	case "windows":
+		cmd = exec.Command("wt.exe", "-w", "0", "new-tab", "--title", r.sess,
+			"herdr.exe", "--session", r.sess, "agent", "attach", r.pane)
+	default:
+		inner := fmt.Sprintf("exec herdr --session %s agent attach %s", r.sess, r.pane)
+		args := []string{"wt.exe", "-w", "0", "new-tab", "--title", r.sess, "wsl.exe"}
+		if d := f.eng.WSLDistro(); d != "" {
+			args = append(args, "-d", d)
+		}
+		args = append(args, "--", "sh", "-lc", inner)
+		cmd = exec.Command(args[0], args[1:]...)
+	}
+	if err := cmd.Start(); err != nil {
+		f.debugf("openAgent %s/%s: %v", r.sess, r.pane, err)
+	}
+}
+
+// clickRow activates a clicked row: agent rows open their terminal,
+// session headers and group lines toggle their group.
 func (f *flyout) clickRow(lParam uintptr) {
 	if !f.visible || len(f.lastGeom) == 0 {
 		return
@@ -393,6 +419,11 @@ func (f *flyout) clickRow(lParam uintptr) {
 			continue
 		}
 		r := f.lastRows[i]
+		if r.pane != "" {
+			// agent row: open a terminal attached to that agent
+			f.openAgent(r)
+			return
+		}
 		if r.toggle == "" {
 			return
 		}

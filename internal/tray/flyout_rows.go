@@ -41,7 +41,9 @@ type flyRow struct {
 	kind   rowKind
 	dot    uint32   // COLORREF; 0 = no dot
 	text   string   // line 1 (agent blocks: the title)
-	host   string   // session rows: the host label (wsl, windows, local)
+	host   string   // session rows: the host label; agent rows: host to open on
+	sess   string   // agent rows: session name the agent belongs to
+	pane   string   // agent rows: herdr pane id, when the agent has one
 	sub    string   // line 2, agent blocks only (runner · project)
 	dim    bool     // paint in the dim color
 	toggle string   // group key this row toggles ("" = inert)
@@ -154,17 +156,18 @@ func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 				dot:  colorRef(icon.Color(engine.RowSeverity(a.Status, a.Wants))),
 				text: orDash(gdiSafe(title)), // line 1: what it is doing
 				sub:  gdiSafe(info),          // line 2: runner · project, dim
+				host: s.Host, sess: s.Name, pane: a.PaneID,
 			})
 		}
-		rows = appendGroup(rows, key+"/finished", "finished", finished, "waiting", restOpen)
-		rows = appendGroup(rows, key+"/resting", "resting", resting, "idle", restOpen)
+		rows = appendGroup(rows, key+"/finished", "finished", finished, "waiting", restOpen, s.Host, s.Name)
+		rows = appendGroup(rows, key+"/resting", "resting", resting, "idle", restOpen, s.Host, s.Name)
 	}
 	return rows
 }
 
 // appendGroup adds one collapsible group line and, when the group is
 // open, one compact row per agent (dot in the group's severity color).
-func appendGroup(rows []flyRow, key, label string, agents []engine.AgentView, sev string, open map[string]bool) []flyRow {
+func appendGroup(rows []flyRow, key, label string, agents []engine.AgentView, sev string, open map[string]bool, host, sess string) []flyRow {
 	if len(agents) == 0 {
 		return rows
 	}
@@ -190,6 +193,7 @@ func appendGroup(rows []flyRow, key, label string, agents []engine.AgentView, se
 			dot:  colorRef(icon.Color(sev)),
 			text: orDash(gdiSafe(title)),
 			dim:  true,
+			host: host, sess: sess, pane: a.PaneID,
 		})
 	}
 	return rows
