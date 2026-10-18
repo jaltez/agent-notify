@@ -99,7 +99,7 @@ func gdiSafe(s string) string {
 // "session/resting").
 func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 	rows := []flyRow{
-		{kind: rowSummary, dot: colorRef(icon.Color(v.Severity())), text: "agent-notify"},
+		{kind: rowSummary, dot: colorRef(icon.Color(v.Severity())), text: "Agent Notify"},
 		{kind: rowSummarySub, text: v.Summary(), dim: true, bar: stateBar(v)},
 	}
 	if len(v.Sessions) == 0 {
