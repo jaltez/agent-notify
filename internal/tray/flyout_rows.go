@@ -41,6 +41,7 @@ type flyRow struct {
 	kind   rowKind
 	dot    uint32   // COLORREF; 0 = no dot
 	text   string   // line 1 (agent blocks: the title)
+	host   string   // session rows: the host label (wsl, windows, local)
 	sub    string   // line 2, agent blocks only (runner · project)
 	dim    bool     // paint in the dim color
 	toggle string   // group key this row toggles ("" = inert)
@@ -130,7 +131,8 @@ func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 		rows = append(rows, flyRow{
 			kind:   rowSession,
 			text:   fmt.Sprintf("%s %s", chevron(open), s.Name),
-			sub:    fmt.Sprintf("%s · %d agent%s%s", s.Host, len(s.Agents), pluralS(len(s.Agents)), tally(s.Agents)+state),
+			host:   s.Host,
+			sub:    fmt.Sprintf("%d agent%s%s", len(s.Agents), pluralS(len(s.Agents)), tally(s.Agents)+state),
 			dim:    len(active) == 0,
 			toggle: key,
 			open:   open,

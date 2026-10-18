@@ -58,6 +58,7 @@ const (
 
 // COLORREF values (0x00BBGGRR).
 const (
+	colorHost   = 0x00C8C87F // session host label (teal, BGR)
 	colorBG     = 0x00202020
 	colorBorder = 0x00453C3C
 	colorBand   = 0x002B2B2B // session header background
@@ -70,41 +71,45 @@ var (
 	gdi32    = windows.NewLazySystemDLL("gdi32.dll")
 	kernel32 = windows.NewLazySystemDLL("kernel32.dll")
 
-	procRegisterClassExW      = user32.NewProc("RegisterClassExW")
-	procLoadCursorW           = user32.NewProc("LoadCursorW")
-	procCreateWindowExW       = user32.NewProc("CreateWindowExW")
-	procDefWindowProcW        = user32.NewProc("DefWindowProcW")
-	procSetWindowPos          = user32.NewProc("SetWindowPos")
-	procSetForegroundWindow   = user32.NewProc("SetForegroundWindow")
-	procBeginPaint            = user32.NewProc("BeginPaint")
-	procEndPaint              = user32.NewProc("EndPaint")
-	procFillRect              = user32.NewProc("FillRect")
-	procFillRgn               = gdi32.NewProc("FillRgn")
-	procTrackMouseEvent       = user32.NewProc("TrackMouseEvent")
-	procCreateSolidBrush      = gdi32.NewProc("CreateSolidBrush")
-	procDeleteObject          = gdi32.NewProc("DeleteObject")
-	procCreateFontIndirectW   = gdi32.NewProc("CreateFontIndirectW")
-	procSelectObject          = gdi32.NewProc("SelectObject")
-	procSetBkMode             = gdi32.NewProc("SetBkMode")
-	procSetTextColor          = gdi32.NewProc("SetTextColor")
-	procDrawTextW             = user32.NewProc("DrawTextW")
-	procEllipse               = gdi32.NewProc("Ellipse")
-	procCreateRoundRectRgn    = gdi32.NewProc("CreateRoundRectRgn")
-	procSetWindowRgn          = user32.NewProc("SetWindowRgn")
-	procSystemParametersInfoW = user32.NewProc("SystemParametersInfoW")
-	procSetTimer              = user32.NewProc("SetTimer")
-	procKillTimer             = user32.NewProc("KillTimer")
-	procShowWindow            = user32.NewProc("ShowWindow")
-	procFrameRect             = user32.NewProc("FrameRect")
-	procGetModuleHandleW      = kernel32.NewProc("GetModuleHandleW")
-	procGetWindowLongPtrW     = user32.NewProc("GetWindowLongPtrW")
-	procPeekMessageW          = user32.NewProc("PeekMessageW")
-	procTranslateMessage      = user32.NewProc("TranslateMessage")
-	procDispatchMessageW      = user32.NewProc("DispatchMessageW")
-	procGetWindowRect         = user32.NewProc("GetWindowRect")
-	procGetForegroundWindow   = user32.NewProc("GetForegroundWindow")
-	procPostMessageW          = user32.NewProc("PostMessageW")
-	procInvalidateRect        = user32.NewProc("InvalidateRect")
+	procRegisterClassExW       = user32.NewProc("RegisterClassExW")
+	procLoadCursorW            = user32.NewProc("LoadCursorW")
+	procCreateWindowExW        = user32.NewProc("CreateWindowExW")
+	procDefWindowProcW         = user32.NewProc("DefWindowProcW")
+	procSetWindowPos           = user32.NewProc("SetWindowPos")
+	procSetForegroundWindow    = user32.NewProc("SetForegroundWindow")
+	procBeginPaint             = user32.NewProc("BeginPaint")
+	procEndPaint               = user32.NewProc("EndPaint")
+	procFillRect               = user32.NewProc("FillRect")
+	procFillRgn                = gdi32.NewProc("FillRgn")
+	procTrackMouseEvent        = user32.NewProc("TrackMouseEvent")
+	procCreateSolidBrush       = gdi32.NewProc("CreateSolidBrush")
+	procDeleteObject           = gdi32.NewProc("DeleteObject")
+	procCreateFontIndirectW    = gdi32.NewProc("CreateFontIndirectW")
+	procSelectObject           = gdi32.NewProc("SelectObject")
+	procSetBkMode              = gdi32.NewProc("SetBkMode")
+	procSetTextColor           = gdi32.NewProc("SetTextColor")
+	procDrawTextW              = user32.NewProc("DrawTextW")
+	procEllipse                = gdi32.NewProc("Ellipse")
+	procCreateRoundRectRgn     = gdi32.NewProc("CreateRoundRectRgn")
+	procCreateCompatibleDC     = gdi32.NewProc("CreateCompatibleDC")
+	procCreateCompatibleBitmap = gdi32.NewProc("CreateCompatibleBitmap")
+	procBitBlt                 = gdi32.NewProc("BitBlt")
+	procDeleteDC               = gdi32.NewProc("DeleteDC")
+	procSetWindowRgn           = user32.NewProc("SetWindowRgn")
+	procSystemParametersInfoW  = user32.NewProc("SystemParametersInfoW")
+	procSetTimer               = user32.NewProc("SetTimer")
+	procKillTimer              = user32.NewProc("KillTimer")
+	procShowWindow             = user32.NewProc("ShowWindow")
+	procFrameRect              = user32.NewProc("FrameRect")
+	procGetModuleHandleW       = kernel32.NewProc("GetModuleHandleW")
+	procGetWindowLongPtrW      = user32.NewProc("GetWindowLongPtrW")
+	procPeekMessageW           = user32.NewProc("PeekMessageW")
+	procTranslateMessage       = user32.NewProc("TranslateMessage")
+	procDispatchMessageW       = user32.NewProc("DispatchMessageW")
+	procGetWindowRect          = user32.NewProc("GetWindowRect")
+	procGetForegroundWindow    = user32.NewProc("GetForegroundWindow")
+	procPostMessageW           = user32.NewProc("PostMessageW")
+	procInvalidateRect         = user32.NewProc("InvalidateRect")
 )
 
 type RECT struct {
@@ -152,6 +157,8 @@ type flyout struct {
 	sizedW int32 // width of the last applied resize
 	areaW  int32
 	areaH  int32
+	areaR  int32 // work area right/bottom, for bottom-right anchoring
+	areaB  int32
 
 	// hover highlight (window thread): index into last-painted rows
 	hover    int32
@@ -424,6 +431,8 @@ func (f *flyout) show() {
 	}
 	f.areaW = area.Right - area.Left
 	f.areaH = area.Bottom - area.Top
+	f.areaR = area.Right
+	f.areaB = area.Bottom
 	_, _, w, contentH := f.layout(f.areaW, f.areaH)
 	f.scroll = 0
 	// as tall as the content, up to the top of the work area; beyond that
@@ -520,18 +529,33 @@ func (f *flyout) drawSessionHeader(hdc uintptr, r flyRow, x, y, w, h int32) {
 		dtEndEllips  = 0x8000
 		dtCalcrect   = 0x0400
 	)
-	p, _ := windows.UTF16PtrFromString(r.text)
+	drawCur := func(s string, dx, dy, dw, dh int32) {
+		p, _ := windows.UTF16PtrFromString(s)
+		rc := RECT{dx, dy, dx + dw, dy + dh}
+		procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
+			uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtVCenter|dtEndEllips))
+	}
+	calc := func(s string) int32 {
+		p, _ := windows.UTF16PtrFromString(s)
+		rc := RECT{}
+		procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
+			uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtCalcrect))
+		return rc.Right
+	}
 	procSelectObject.Call(hdc, uintptr(f.bold))
 	procSetTextColor.Call(hdc, uintptr(colorText))
-	rc := RECT{x, y, x + w, y + h}
-	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
-		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtCalcrect))
-	nameW := rc.Right - rc.Left
-	rc = RECT{x, y, x + w, y + h}
-	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
-		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtVCenter|dtEndEllips))
-	if m := nameW + 6; m < w-8 && r.sub != "" {
-		f.drawTextSmall(hdc, r.sub, x+m, y, w-m, h)
+	nameW := calc(r.text)
+	drawCur(r.text, x, y, w, h)
+	px := x + nameW + 6
+	if r.host != "" && px < x+w-8 {
+		procSelectObject.Call(hdc, uintptr(f.small))
+		procSetTextColor.Call(hdc, uintptr(colorHost))
+		hw := calc(r.host)
+		drawCur(r.host, px, y, x+w-px, h)
+		px += hw + 4
+	}
+	if r.sub != "" && px < x+w-8 {
+		f.drawTextSmall(hdc, r.sub, px, y, x+w-px, h)
 	}
 }
 
@@ -730,24 +754,41 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	f.clampScroll()
 	if cur := f.rectHeight(); cur != winH || f.sizedW != w {
 		const (
-			swpNoMove     = 0x0002
 			swpNoZorder   = 0x0004
 			swpNoActivate = 0x0010
 		)
-		procSetWindowPos.Call(uintptr(f.hwnd), 0, 0, 0, uintptr(w), uintptr(winH),
-			swpNoMove|swpNoZorder|swpNoActivate)
+		// re-anchor bottom-right like show() and keep the rounded
+		// clipping region in sync, or the old region hides the growth
+		procSetWindowPos.Call(uintptr(f.hwnd), 0,
+			uintptr(f.areaR-w-12), uintptr(f.areaB-winH-8),
+			uintptr(w), uintptr(winH),
+			swpNoZorder|swpNoActivate)
+		rgn, _, _ := procCreateRoundRectRgn.Call(0, 0, uintptr(w+1), uintptr(winH+1), 14, 14)
+		procSetWindowRgn.Call(uintptr(f.hwnd), rgn, 1)
 		f.sizedW = w
 	}
+	// draw offscreen and blit once: hover, refresh, and resize repaints
+	// must not flicker
+	mem, _, _ := procCreateCompatibleDC.Call(hdc)
+	bmp, _, _ := procCreateCompatibleBitmap.Call(dc, uintptr(w), uintptr(winH))
+	oldBmp, _, _ := procSelectObject.Call(mem, bmp)
+	dc := mem
+	defer func() {
+		procBitBlt.Call(dc, 0, 0, uintptr(w), uintptr(winH), mem, 0, 0, 0x00CC0020)
+		procSelectObject.Call(mem, oldBmp)
+		procDeleteObject.Call(bmp)
+		procDeleteDC.Call(mem)
+	}()
 	bg, _, _ := procCreateSolidBrush.Call(uintptr(colorBG))
 	defer procDeleteObject.Call(bg)
 	border, _, _ := procCreateSolidBrush.Call(uintptr(colorBorder))
 	defer procDeleteObject.Call(border)
 	frame := RECT{0, 0, w, h}
-	procFrameRectCall(hdc, frame, border)
+	procFrameRectCall(dc, frame, border)
 	client := RECT{1, 1, w - 1, h - 1}
-	procFillRect.Call(hdc, uintptr(unsafe.Pointer(&client)), bg)
+	procFillRect.Call(dc, uintptr(unsafe.Pointer(&client)), bg)
 
-	procSetBkMode.Call(hdc, 1) // TRANSPARENT
+	procSetBkMode.Call(dc, 1) // TRANSPARENT
 
 	clientH := f.winH
 	f.lastRows = rows
@@ -786,7 +827,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				rgn, _, _ := procCreateRoundRectRgn.Call(
 					uintptr(x-6), uintptr(y+1), uintptr(x+w+6), uintptr(y+rh-2), 8, 8)
 				tbrush, _, _ := procCreateSolidBrush.Call(uintptr(tint))
-				procFillRgn.Call(hdc, rgn, tbrush)
+				procFillRgn.Call(dc, rgn, tbrush)
 				procDeleteObject.Call(tbrush)
 				procDeleteObject.Call(rgn)
 			default:
@@ -795,13 +836,13 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				if r.kind == rowSession {
 					bb, _, _ := procCreateSolidBrush.Call(uintptr(colorBand))
 					band := RECT{x - 8, y + 3, x + w + 8, y + rh - 3}
-					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&band)), bb)
+					procFillRect.Call(dc, uintptr(unsafe.Pointer(&band)), bb)
 					procDeleteObject.Call(bb)
 				}
 				if hovered {
 					hb, _, _ := procCreateSolidBrush.Call(uintptr(hoverColor()))
 					hoverRect := RECT{x - 6, y, x + w + 6, y + rh - 2}
-					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&hoverRect)), hb)
+					procFillRect.Call(dc, uintptr(unsafe.Pointer(&hoverRect)), hb)
 					procDeleteObject.Call(hb)
 				}
 			}
@@ -816,7 +857,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 					sw := seg.px * w / baseInner
 					brush, _, _ := procCreateSolidBrush.Call(uintptr(seg.col))
 					bar := RECT{bx, y + rowH + 3, bx + sw, y + rowH + 7}
-					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&bar)), brush)
+					procFillRect.Call(dc, uintptr(unsafe.Pointer(&bar)), brush)
 					procDeleteObject.Call(brush)
 					bx += sw
 				}
@@ -824,16 +865,16 @@ func (f *flyout) paint(hwnd windows.HWND) {
 
 			if r.dot != 0 {
 				brush, _, _ := procCreateSolidBrush.Call(uintptr(r.dot))
-				hold, _, _ := procSelectObject.Call(hdc, brush)
+				hold, _, _ := procSelectObject.Call(dc, brush)
 				d := int32(9)
 				dy := y + rowH/2
 				if r.kind == rowAgent {
 					dy = y + titleH/2 // dot aligns with the title line
 				}
-				procEllipse.Call(hdc,
+				procEllipse.Call(dc,
 					uintptr(x), uintptr(dy-d/2),
 					uintptr(x+d), uintptr(dy+d/2+1))
-				procSelectObject.Call(hdc, hold)
+				procSelectObject.Call(dc, hold)
 				procDeleteObject.Call(brush)
 				x += 17
 				w -= 17
@@ -841,21 +882,21 @@ func (f *flyout) paint(hwnd windows.HWND) {
 			switch {
 			case r.kind == rowAgent:
 				// line 1: title; line 2: runner · project (dim, small)
-				f.drawText(hdc, r.text, x, y, w, titleH, false, r.dim)
-				f.drawTextSmall(hdc, r.sub, x, y+titleH, w, infoH)
+				f.drawText(dc, r.text, x, y, w, titleH, false, r.dim)
+				f.drawTextSmall(dc, r.sub, x, y+titleH, w, infoH)
 			case r.kind == rowSummary:
-				f.drawTextHead(hdc, r.text, x, y, w, rh)
+				f.drawTextHead(dc, r.text, x, y, w, rh)
 			case r.kind == rowSession:
-				f.drawSessionHeader(hdc, r, x, y, w, rh)
+				f.drawSessionHeader(dc, r, x, y, w, rh)
 			case r.kind == rowSummarySub:
 				// text on top, state bar further down with air around it
-				f.drawText(hdc, r.text, x, y, w, rowH-4, false, true)
+				f.drawText(dc, r.text, x, y, w, rowH-4, false, true)
 			default:
-				f.drawText(hdc, r.text, x, y, w, rh, r.kind == rowSummary, r.dim)
+				f.drawText(dc, r.text, x, y, w, rh, r.kind == rowSummary, r.dim)
 			}
 			if r.kind == rowSummary && buildinfo.Version != "" && buildinfo.Version != "dev" {
 				// stamp the build so a stale binary is visible at a glance
-				f.drawTextRight(hdc, buildinfo.Version, x, y, w, rh)
+				f.drawTextRight(dc, buildinfo.Version, x, y, w, rh)
 			}
 		}
 	}
@@ -870,7 +911,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 		thumbY := 4 + int32(float64(trackH-thumbH)*float64(f.scroll)/float64(maxScroll))
 		brush, _, _ := procCreateSolidBrush.Call(uintptr(0x00565656))
 		bar := RECT{w - 6, thumbY, w - 3, thumbY + thumbH}
-		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&bar)), brush)
+		procFillRect.Call(dc, uintptr(unsafe.Pointer(&bar)), brush)
 		procDeleteObject.Call(brush)
 	}
 }

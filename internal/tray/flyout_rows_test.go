@@ -73,11 +73,11 @@ func TestOnlyWorkingKeepsFullRows(t *testing.T) {
 		"▸ 1 finished",   // latched done collapses (green group)
 		"▸ 2 resting",    // idle + unlatched done
 		"▸ quiet",
-		"wsl · 2 agents",
+		"2 agents",
 		"▸ justdone", // finished-only session collapses
-		"wsl · 1 agent · 1 waiting",
+		"1 agent · 1 waiting",
 		"▸ down",
-		"wsl · 1 agent · offline",
+		"1 agent · offline",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in:\n%s", want, joined)
