@@ -5,6 +5,7 @@ package tray
 import (
 	"fmt"
 	"log/slog"
+	"math"
 	"os"
 	"sync"
 	"time"
@@ -30,24 +31,25 @@ const (
 	autoCloseDelay = 30 * time.Second
 	refreshEvery   = time.Second
 
-	sectionH      = 34
-	rowH          = 24 // summary / single-line rows
-	rowTitleH     = 30 // "Agent Notify" line
-	rowSubH       = 34 // counts line + state bar
-	sepAfterSum   = 14
-	titleH        = 24 // agent block: line 1 (title)
-	infoH         = 18 // agent block: line 2 (agent · project)
-	blockGap      = 12
+	sectionH      = 28
+	rowH          = 22 // summary / single-line rows
+	rowTitleH     = 26 // "Agent Notify" line
+	rowSubH       = 32 // counts line + state bar
+	sepAfterSum   = 10
+	titleH        = 20 // agent block: line 1 (title)
+	infoH         = 15 // agent block: line 2 (agent · project)
+	blockGap      = 8
 	agentBlockH   = titleH + infoH + blockGap
-	wheelStep     = 52 // px per wheel notch
+	wheelStep     = 40 // px per wheel notch
 	activateGrace = 600 * time.Millisecond
 	flyClassName  = "agent-notify-flyout"
 
-	// columnar layout: sessions flow into columns; count follows the
-	// work area so one session per column is preferred when it fits
-	colGap         = 14
-	colMinW        = 230
-	colMaxW        = 400
+	// grid layout: sessions fill a columns x rows grid; column count
+	// follows the work area at readable width
+	colGap         = 10
+	colMinW        = 170
+	colMaxW        = 300
+	gridRowGap     = 12
 	wmAppToggle    = 0x8001 // WM_APP+1
 	wmAppRefresh   = 0x8002 // WM_APP+2
 	timerAutoclose = 1
@@ -145,10 +147,8 @@ type flyout struct {
 	contentH   int32
 	winH       int32
 	scrollable bool
-	// columnar layout (window thread): panel width, column geometry
+	// grid layout (window thread): panel width from the active grid
 	width int32
-	cols  int32
-	colW  int32
 	areaW int32
 	areaH int32
 
@@ -302,10 +302,10 @@ func newFlyout(eng *engine.Engine, log *slog.Logger) (*flyout, error) {
 		return nil, fmt.Errorf("RegisterClassExW: %v", err2)
 	}
 	f := &flyout{eng: eng, log: log}
-	f.font = createFont(-15, 400)
-	f.bold = createFont(-15, 600)
-	f.small = createFont(-12, 400)
-	f.head = createFont(-17, 600)
+	f.font = createFont(-13, 400)
+	f.bold = createFont(-13, 600)
+	f.small = createFont(-11, 400)
+	f.head = createFont(-15, 600)
 	title, err := windows.UTF16PtrFromString("agent-notify")
 	if err != nil {
 		return nil, err
@@ -568,33 +568,16 @@ func rowHeight(r flyRow, blockH int32) int32 {
 	return rowH
 }
 
-// layout assigns every row a rectangle for the columnar panel. The
-// two summary rows span the full width; sessions flow into as many
-// columns as the work area allows (one per session when it fits),
-// greedy-balanced by estimated height. Returns the rows, their
-// rectangles, the panel width, and the panel height.
+// layout arranges the panel as a scalable grid: the two summary rows
+// span the full width; session groups fill a columns x rows grid
+// (2x2, 3x2, ...), picking the column count whose rectangle best
+// matches a widescreen ratio without overflowing the work area.
+// Returns the rows, their rectangles, the panel width, and height.
 func (f *flyout) layout(areaW, areaH int32) ([]flyRow, []rowGeom, int32, int32) {
 	rows := f.rows()
 	geoms := make([]rowGeom, 0, len(rows))
 
-	sessions := 0
-	for _, r := range rows {
-		if r.kind == rowSession {
-			sessions++
-		}
-	}
 	avail := areaW - 2*flyPad
-	cols := int32(1)
-	for cols < int32(sessions) && (cols+1)*(colMinW+colGap)-colGap <= avail {
-		cols++
-	}
-	colW := (avail - (cols-1)*colGap) / cols
-	if colW > colMaxW {
-		colW = colMaxW
-	}
-	f.width = 2*flyPad + cols*colW + (cols-1)*colGap
-	f.cols = cols
-	f.colW = colW
 
 	// full-width header rows on top
 	h := int32(flyPad)
@@ -623,36 +606,77 @@ func (f *flyout) layout(areaW, areaH int32) ([]flyRow, []rowGeom, int32, int32) 
 	if len(cur) > 0 {
 		groups = append(groups, cur)
 	}
-	if int32(len(groups)) < cols {
-		cols = int32(len(groups))
-		f.width = 2*flyPad + cols*colW + (cols-1)*colGap
+
+	groupH := func(g []flyRow) int32 {
+		var s int32
+		for _, r := range g {
+			s += rowHeight(r, f.agentBlockH())
+		}
+		return s
 	}
 
-	colY := make([]int32, cols)
-	for _, g := range groups {
-		c := 0 // shortest column wins (greedy height balance)
-		for j := int32(1); j < cols; j++ {
-			if colY[j] < colY[c] {
-				c = int(j)
+	// candidate column counts: one session wide up to the widest the
+	// work area allows at readable column width
+	maxCols := int32(1)
+	for maxCols < int32(len(groups)) && (maxCols+1)*(colMinW+colGap)-colGap <= avail {
+		maxCols++
+	}
+	bestCols, bestW, bestScore := int32(1), int32(0), math.MaxFloat64
+	for c := int32(1); c <= maxCols; c++ {
+		colW := (avail - (c-1)*colGap) / c
+		if colW > colMaxW {
+			colW = colMaxW
+		}
+		if colW < 140 {
+			continue // unreadably narrow
+		}
+		w := 2*flyPad + c*colW + (c-1)*colGap
+		hgt := topH
+		for r := int32(0); r*c < int32(len(groups)); r++ {
+			var rowH int32
+			for _, g := range groups[r*c : min(int(c*(r+1)), len(groups))] {
+				if gh := groupH(g); gh > rowH {
+					rowH = gh
+				}
+			}
+			hgt += rowH + gridRowGap
+		}
+		hgt += flyPad - gridRowGap
+		if w > areaW || hgt > areaH*9/10 {
+			continue // overflows: unusable
+		}
+		score := math.Abs(float64(w)/float64(hgt) - 1.5)
+		if score < bestScore {
+			bestScore, bestCols, bestW = score, c, w
+		}
+	}
+	if bestW == 0 {
+		// nothing fits: widest grid, let the panel scroll
+		bestCols = maxCols
+	}
+	colW := (avail - (bestCols-1)*colGap) / bestCols
+	if colW > colMaxW {
+		colW = colMaxW
+	}
+	f.width = 2*flyPad + bestCols*colW + (bestCols-1)*colGap
+
+	rowY := flyPad + topH
+	for r := 0; r*int(bestCols) < len(groups); r++ {
+		rowGroups := groups[r*int(bestCols) : min((r+1)*int(bestCols), len(groups))]
+		var rowH int32
+		for j, g := range rowGroups {
+			cx := flyPad + int32(j)*(colW+colGap)
+			for _, rr := range g {
+				rh := rowHeight(rr, f.agentBlockH())
+				geoms = append(geoms, rowGeom{R: rr, X: cx, Y: rowY, W: colW, H: rh})
+				if rh > rowH {
+					rowH = rh
+				}
 			}
 		}
-		cx := flyPad + int32(c)*(colW+colGap)
-		for _, r := range g {
-			rh := rowHeight(r, f.agentBlockH())
-			geoms = append(geoms, rowGeom{
-				R: r, X: cx, Y: flyPad + topH + colY[c], W: colW, H: rh,
-			})
-			colY[c] += rh
-		}
+		rowY += rowH + gridRowGap
 	}
-	var maxCol int32
-	for _, cy := range colY {
-		if cy > maxCol {
-			maxCol = cy
-		}
-	}
-	height := flyPad + topH + maxCol + flyPad
-	return rows, geoms, f.width, height
+	return rows, geoms, f.width, rowY - gridRowGap + flyPad
 }
 
 func (f *flyout) paint(hwnd windows.HWND) {

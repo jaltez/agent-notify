@@ -17,7 +17,7 @@ type rowKind uint8
 // inner width) and the Windows painter.
 const (
 	flyWidth = 420
-	flyPad   = 18
+	flyPad   = 14
 )
 
 const (
