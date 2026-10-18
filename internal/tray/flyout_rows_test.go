@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/jaltez/agent-notify/internal/icon"
+
 	"github.com/jaltez/agent-notify/internal/engine"
 )
 
@@ -24,6 +26,12 @@ func view() engine.View {
 				Agents: []engine.AgentView{
 					{Name: "pi", Status: "idle", Title: "resting one"},
 					{Name: "pi", Status: "idle", Title: "resting two"},
+				},
+			},
+			{
+				Host: "wsl", Name: "justdone", Up: true,
+				Agents: []engine.AgentView{
+					{Name: "pi", Status: "done", Wants: true, Title: "freshly finished"},
 				},
 			},
 			{Host: "wsl", Name: "down", Up: false, Agents: []engine.AgentView{
@@ -55,17 +63,17 @@ func find(t *testing.T, rows []flyRow, kind rowKind, key string) flyRow {
 	return flyRow{}
 }
 
-func TestAttentionSessionExpandsByDefault(t *testing.T) {
+func TestOnlyWorkingKeepsFullRows(t *testing.T) {
 	rows := buildRows(view(), nil, nil)
-	got := texts(rows)
-	joined := strings.Join(got, "\n")
+	joined := strings.Join(texts(rows), "\n")
 	for _, want := range []string{
 		"▾ wsl/default — 4 agents · 1 working · 1 waiting",
 		"Refine shapes",  // working block
-		"needs you",      // latched done block
 		"pi · Nervefall", // block second line
-		"▸ 2 resting",    // idle+unlatched done collapse
+		"▸ 1 finished",   // latched done collapses (green group)
+		"▸ 2 resting",    // idle + unlatched done
 		"▸ wsl/quiet — 2 agents",
+		"▸ wsl/justdone — 1 agent · 1 waiting", // finished-only session collapses
 		"▸ wsl/down — 1 agent · offline",
 	} {
 		if !strings.Contains(joined, want) {
@@ -73,17 +81,16 @@ func TestAttentionSessionExpandsByDefault(t *testing.T) {
 		}
 	}
 	for _, r := range rows {
+		if r.kind == rowAgent && strings.Contains(r.text, "needs you") {
+			t.Error("finished agents must not get full blocks")
+		}
 		if r.kind == rowAgentCompact {
-			t.Errorf("compact rows must not appear while the resting group is closed: %q", r.text)
+			t.Errorf("compact rows must not appear while groups are closed: %q", r.text)
 		}
 	}
-	// quiet session collapses to its header alone
 	s := find(t, rows, rowSession, "wsl/quiet")
-	if s.open {
-		t.Error("all-resting session must default to collapsed")
-	}
-	if !s.dim {
-		t.Error("session without attention agents should paint dim")
+	if s.open || !s.dim {
+		t.Error("all-resting session must default to collapsed and dim")
 	}
 }
 
@@ -102,50 +109,42 @@ func TestOverridesFlipDefaults(t *testing.T) {
 		}
 	}
 	if compact != 0 {
-		t.Errorf("resting group starts closed: expected 0 compact rows, got %d", compact)
+		t.Errorf("groups start closed: expected 0 compact rows, got %d", compact)
 	}
 
 	d := find(t, rows, rowSession, "wsl/default")
 	if d.open {
-		t.Error("user override must collapse the attention session")
+		t.Error("user override must collapse the active session")
 	}
 	for _, r := range rows {
-		if r.kind == rowAgent && r.toggle == "" && strings.Contains(r.text, "Refine shapes") {
+		if r.kind == rowAgent && strings.Contains(r.text, "Refine shapes") {
 			t.Error("collapsed session must hide its attention blocks")
 		}
 	}
 }
 
-func TestRestingOverrideListsCompactRows(t *testing.T) {
-	rows := buildRows(view(),
-		map[string]bool{"wsl/quiet": true},
-		map[string]bool{"wsl/quiet": true})
-	var compact int
+func TestGroupToggleListsCompactRows(t *testing.T) {
+	rows := buildRows(view(), nil, map[string]bool{
+		"wsl/default/finished": true,
+		"wsl/default/resting":  true,
+	})
+	var finished, resting int
 	for _, r := range rows {
-		if r.kind == rowAgentCompact {
-			compact++
-		}
-	}
-	if compact != 2 {
-		t.Errorf("open resting group should paint 2 compact rows, got %d", compact)
-	}
-}
-
-func TestRestingGroupToggles(t *testing.T) {
-	rows := buildRows(view(), nil, map[string]bool{"wsl/default": true})
-	var sawCompact int
-	for _, r := range rows {
-		if r.kind == rowAgentCompact {
-			sawCompact++
-		}
-		if r.kind == rowResting && r.toggle == "wsl/default" {
+		switch {
+		case r.kind == rowGroup && r.toggle == "wsl/default/finished":
 			if !strings.HasPrefix(r.text, "▾") || !r.open {
-				t.Errorf("resting line should read expanded, got %q", r.text)
+				t.Errorf("finished group should read expanded, got %q", r.text)
+			}
+		case r.kind == rowAgentCompact:
+			if r.dot == colorRef(icon.Color("waiting")) {
+				finished++
+			} else {
+				resting++
 			}
 		}
 	}
-	if sawCompact != 2 {
-		t.Errorf("open resting group should paint 2 compact rows, got %d", sawCompact)
+	if finished != 1 || resting != 2 {
+		t.Errorf("compact rows: finished=%d resting=%d, want 1 and 2", finished, resting)
 	}
 }
 
