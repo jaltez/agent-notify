@@ -30,14 +30,14 @@ const (
 	autoCloseDelay = 8 * time.Second
 	refreshEvery   = time.Second
 
-	sectionH       = 30
+	sectionH       = 34
 	rowH           = 24 // summary / single-line rows
-	sepAfterSum    = 12
+	sepAfterSum    = 14
 	titleH         = 24 // agent block: line 1 (title)
 	infoH          = 18 // agent block: line 2 (agent · project)
-	blockGap       = 10
+	blockGap       = 12
 	agentBlockH    = titleH + infoH + blockGap
-	wheelStep      = 48 // px per wheel notch
+	wheelStep      = 52 // px per wheel notch
 	activateGrace  = 600 * time.Millisecond
 	flyClassName   = "agent-notify-flyout"
 	wmAppToggle    = 0x8001 // WM_APP+1
@@ -160,6 +160,7 @@ type flyout struct {
 	font      windows.Handle
 	bold      windows.Handle
 	small     windows.Handle
+	head      windows.Handle // session headers: larger, bold
 }
 
 var currentFly *flyout
@@ -278,6 +279,7 @@ func newFlyout(eng *engine.Engine, log *slog.Logger) (*flyout, error) {
 	f.font = createFont(-15, 400)
 	f.bold = createFont(-15, 600)
 	f.small = createFont(-12, 400)
+	f.head = createFont(-17, 600)
 	title, err := windows.UTF16PtrFromString("agent-notify")
 	if err != nil {
 		return nil, err
@@ -456,7 +458,23 @@ func (f *flyout) hide() {
 	f.visible = false
 }
 
+// drawTextHead draws a session header in the larger bold font.
+func (f *flyout) drawTextHead(hdc uintptr, text string, x, y, w, h int32) {
+	procSelectObject.Call(hdc, uintptr(f.head))
+	procSetTextColor.Call(hdc, uintptr(colorText))
+	p, _ := windows.UTF16PtrFromString(text)
+	const (
+		dtSingleLine = 0x0020
+		dtVCenter    = 0x0004
+		dtEndEllips  = 0x8000
+	)
+	rc := RECT{x, y, x + w, y + h}
+	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
+		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtVCenter|dtEndEllips))
+}
+
 // drawTextRight draws a small dim string right-aligned in its cell.
+
 func (f *flyout) drawTextRight(hdc uintptr, text string, x, y, w, h int32) {
 	procSelectObject.Call(hdc, uintptr(f.small))
 	procSetTextColor.Call(hdc, uintptr(colorDim))
@@ -576,7 +594,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 			switch {
 			case r.kind == rowAgent:
 				// whole-block wash: status color blended over the panel
-				tint := blendColor(r.dot, 0.16, hovered)
+				tint := blendColor(r.dot, 0.10, hovered)
 				rgn, _, _ := procCreateRoundRectRgn.Call(
 					uintptr(x-6), uintptr(y+1), uintptr(x+w+6), uintptr(y+rh-2), 8, 8)
 				tbrush, _, _ := procCreateSolidBrush.Call(uintptr(tint))
@@ -633,11 +651,13 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				// line 1: title; line 2: runner · project (dim, small)
 				f.drawText(hdc, r.text, x, y, w, titleH, false, r.dim)
 				f.drawTextSmall(hdc, r.sub, x, y+titleH, w, infoH)
+			case r.kind == rowSession:
+				f.drawTextHead(hdc, r.text, x, y, w, rh)
 			case r.kind == rowSummarySub:
 				// keep the line clear of the state bar drawn underneath
 				f.drawText(hdc, r.text, x, y, w, rowH-5, false, true)
 			default:
-				f.drawText(hdc, r.text, x, y, w, rh, r.kind == rowSession || r.kind == rowSummary, r.dim)
+				f.drawText(hdc, r.text, x, y, w, rh, r.kind == rowSummary, r.dim)
 			}
 			if r.kind == rowSummary && buildinfo.Version != "" && buildinfo.Version != "dev" {
 				// stamp the build so a stale binary is visible at a glance
