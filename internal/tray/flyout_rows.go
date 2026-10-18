@@ -68,24 +68,26 @@ func orDash(s string) string {
 }
 
 // gdiSafe strips glyphs the flyout's Segoe UI text drawing renders as
-// tofu boxes: emoji, pictographs, variation selectors, and zero-width
-// joiners that herdr titles increasingly carry. Geometric shapes
-// (chevrons) and normal text pass through.
+// tofu boxes: emoji, pictographs, nerd-font Private Use Area icons,
+// variation selectors, and zero-width joiners that herdr titles carry.
+// Geometric shapes (chevrons) and normal text pass through.
 func gdiSafe(s string) string {
 	clean := make([]rune, 0, len(s))
 	for _, r := range s {
 		switch {
 		case r >= 0x1F000 && r <= 0x1FAFF, // emoji & pictographs
-			r >= 0x2600 && r <= 0x27BF, // misc symbols, dingbats
-			r >= 0x2B00 && r <= 0x2BFF, // arrows, stars
-			r >= 0xFE00 && r <= 0xFE0F, // variation selectors
-			r >= 0x200B && r <= 0x200F, // zero-width, bidi marks
-			r == 0x200D, r == 0x20E3:   // ZWJ, keycap
+			r >= 0x2600 && r <= 0x27BF,    // misc symbols, dingbats
+			r >= 0x2B00 && r <= 0x2BFF,    // arrows, stars
+			r >= 0xFE00 && r <= 0xFE0F,    // variation selectors
+			r >= 0x200B && r <= 0x200F,    // zero-width, bidi marks
+			r >= 0xE000 && r <= 0xF8FF,    // BMP private use (nerd fonts)
+			r >= 0xF0000 && r <= 0x10FFFD, // supplementary private use
+			r == 0x200D, r == 0x20E3:      // ZWJ, keycap
 			continue
 		}
 		clean = append(clean, r)
 	}
-	return strings.TrimSpace(string(clean))
+	return strings.Join(strings.Fields(string(clean)), " ")
 }
 
 // buildRows lays out the flyout for a view. Session headers are always
