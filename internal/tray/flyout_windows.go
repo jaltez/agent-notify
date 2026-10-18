@@ -46,10 +46,10 @@ const (
 
 	// grid layout: sessions fill a columns x rows grid; column count
 	// follows the work area at readable width
-	colGap         = 10
+	colGap         = 24
 	colMinW        = 170
 	colMaxW        = 300
-	gridRowGap     = 12
+	gridRowGap     = 14
 	wmAppToggle    = 0x8001 // WM_APP+1
 	wmAppRefresh   = 0x8002 // WM_APP+2
 	timerAutoclose = 1
@@ -148,9 +148,10 @@ type flyout struct {
 	winH       int32
 	scrollable bool
 	// grid layout (window thread): panel width from the active grid
-	width int32
-	areaW int32
-	areaH int32
+	width  int32
+	sizedW int32 // width of the last applied resize
+	areaW  int32
+	areaH  int32
 
 	// hover highlight (window thread): index into last-painted rows
 	hover    int32
@@ -447,6 +448,7 @@ func (f *flyout) show() {
 		swpShowWindow); r == 0 {
 		f.debugf("flyout show: SetWindowPos failed: %v", err)
 	}
+	f.sizedW = w
 	if r, _, _ := procSetForegroundWindow.Call(uintptr(f.hwnd)); r != 0 {
 		f.activated = true
 	} else {
@@ -507,6 +509,30 @@ func (f *flyout) drawTextHead(hdc uintptr, text string, x, y, w, h int32) {
 	rc := RECT{x, y, x + w, y + h}
 	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
 		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtVCenter|dtEndEllips))
+}
+
+// drawSessionHeader draws the chevron + session name in bold, then the
+// dim host/counts meta after it.
+func (f *flyout) drawSessionHeader(hdc uintptr, r flyRow, x, y, w, h int32) {
+	const (
+		dtSingleLine = 0x0020
+		dtVCenter    = 0x0004
+		dtEndEllips  = 0x8000
+		dtCalcrect   = 0x0400
+	)
+	p, _ := windows.UTF16PtrFromString(r.text)
+	procSelectObject.Call(hdc, uintptr(f.bold))
+	procSetTextColor.Call(hdc, uintptr(colorText))
+	rc := RECT{x, y, x + w, y + h}
+	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
+		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtCalcrect))
+	nameW := rc.Right - rc.Left
+	rc = RECT{x, y, x + w, y + h}
+	procDrawTextW.Call(hdc, uintptr(unsafe.Pointer(p)), ^uintptr(0),
+		uintptr(unsafe.Pointer(&rc)), uintptr(dtSingleLine|dtVCenter|dtEndEllips))
+	if m := nameW + 6; m < w-8 && r.sub != "" {
+		f.drawTextSmall(hdc, r.sub, x+m, y, w-m, h)
+	}
 }
 
 // drawTextRight draws a small dim string right-aligned in its cell.
@@ -691,18 +717,26 @@ func (f *flyout) paint(hwnd windows.HWND) {
 
 	rows, geoms, w, h := f.layout(f.areaW, f.areaH)
 	f.contentH = h
-	if f.scrollable {
-		f.clampScroll()
+	// refresh and in-panel collapse/expand change the content: keep the
+	// window inside the work area and resize on the spot, scrollbar and
+	// scroll position included
+	maxH := f.areaH - 16
+	winH, scrollable := h, h > maxH
+	if scrollable {
+		winH = maxH
 	}
-	// live refresh can add rows after show(); grow the window to fit
-	if cur := f.rectHeight(); cur != h {
+	f.scrollable = scrollable
+	f.winH = winH
+	f.clampScroll()
+	if cur := f.rectHeight(); cur != winH || f.sizedW != w {
 		const (
 			swpNoMove     = 0x0002
 			swpNoZorder   = 0x0004
 			swpNoActivate = 0x0010
 		)
-		procSetWindowPos.Call(uintptr(f.hwnd), 0, 0, 0, uintptr(w), uintptr(h),
+		procSetWindowPos.Call(uintptr(f.hwnd), 0, 0, 0, uintptr(w), uintptr(winH),
 			swpNoMove|swpNoZorder|swpNoActivate)
+		f.sizedW = w
 	}
 	bg, _, _ := procCreateSolidBrush.Call(uintptr(colorBG))
 	defer procDeleteObject.Call(bg)
@@ -809,8 +843,10 @@ func (f *flyout) paint(hwnd windows.HWND) {
 				// line 1: title; line 2: runner · project (dim, small)
 				f.drawText(hdc, r.text, x, y, w, titleH, false, r.dim)
 				f.drawTextSmall(hdc, r.sub, x, y+titleH, w, infoH)
-			case r.kind == rowSession:
+			case r.kind == rowSummary:
 				f.drawTextHead(hdc, r.text, x, y, w, rh)
+			case r.kind == rowSession:
+				f.drawSessionHeader(hdc, r, x, y, w, rh)
 			case r.kind == rowSummarySub:
 				// text on top, state bar further down with air around it
 				f.drawText(hdc, r.text, x, y, w, rowH-4, false, true)
