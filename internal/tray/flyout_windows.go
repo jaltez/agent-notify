@@ -770,11 +770,11 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	// draw offscreen and blit once: hover, refresh, and resize repaints
 	// must not flicker
 	mem, _, _ := procCreateCompatibleDC.Call(hdc)
-	bmp, _, _ := procCreateCompatibleBitmap.Call(dc, uintptr(w), uintptr(winH))
+	bmp, _, _ := procCreateCompatibleBitmap.Call(hdc, uintptr(w), uintptr(winH))
 	oldBmp, _, _ := procSelectObject.Call(mem, bmp)
 	dc := mem
 	defer func() {
-		procBitBlt.Call(dc, 0, 0, uintptr(w), uintptr(winH), mem, 0, 0, 0x00CC0020)
+		procBitBlt.Call(hdc, 0, 0, uintptr(w), uintptr(winH), mem, 0, 0, 0x00CC0020)
 		procSelectObject.Call(mem, oldBmp)
 		procDeleteObject.Call(bmp)
 		procDeleteDC.Call(mem)
