@@ -117,6 +117,23 @@ func New(cfg Config, opts ...Option) (*Engine, error) {
 // ("" = wsl.exe's default distro).
 func (e *Engine) WSLDistro() string { return e.cfg.Herdr.WSL.Distro }
 
+// SessionSocket returns the socket reference and distro home for a
+// session as its backend discovered it; used to target one-shot CLI
+// calls (agent focus) at the right server.
+func (e *Engine) SessionSocket(host, name string) (ref, home string) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	t := e.sessions[host+"/"+name]
+	if t == nil {
+		return "", ""
+	}
+	return t.ref, t.home
+}
+
+// WSLExtraPath returns the configured extra PATH entries for herdr
+// calls inside the WSL distro.
+func (e *Engine) WSLExtraPath() []string { return e.cfg.Herdr.WSL.ExtraPath }
+
 // Backends lists the enabled backend names.
 func (e *Engine) Backends() []string {
 	out := make([]string, len(e.backends))
@@ -200,6 +217,7 @@ func (e *Engine) pollSession(ctx context.Context, br *backendRun, s herdr.Sessio
 		t = newTracker(s.Host, s.Name)
 		e.sessions[key] = t
 	}
+	t.ref, t.home = s.Ref, s.Home
 	var evs []event.Event
 	var changed bool
 	if err != nil {

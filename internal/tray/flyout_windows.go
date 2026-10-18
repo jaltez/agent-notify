@@ -3,14 +3,13 @@
 package tray
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"math"
 	"os"
-	"os/exec"
 	"strings"
 	"sync"
-	"syscall"
 	"time"
 	"unicode/utf16"
 	"unsafe"
@@ -19,6 +18,8 @@ import (
 
 	"github.com/jaltez/agent-notify/internal/buildinfo"
 	"github.com/jaltez/agent-notify/internal/engine"
+	"github.com/jaltez/agent-notify/internal/herdr"
+	"github.com/jaltez/agent-notify/internal/proc"
 )
 
 // A small always-on-top flyout panel shown next to the tray on left
@@ -388,28 +389,36 @@ func (f *flyout) trackHover(lParam uintptr) {
 // focusAgent focuses the clicked agent in an already-open client:
 // herdr's server-side `agent focus` moves any attached client to that
 // agent's workspace/tab/pane, then an existing window whose title
-// mentions herdr is raised. Nothing is opened or attached.
+// mentions herdr is raised. Nothing is opened or attached. The CLI
+// call mirrors how the wsl backend itself invokes herdr (wsl.exe -e,
+// explicit PATH, HERDR_SOCKET_PATH), because login shells under
+// wsl.exe do not see ~/.local/bin.
 func (f *flyout) focusAgent(r flyRow) {
 	f.hide()
-	var cmd *exec.Cmd
-	switch r.host {
-	case "windows":
-		cmd = exec.Command("herdr.exe", "--session", r.sess, "agent", "focus", r.pane)
-	default:
-		inner := fmt.Sprintf("exec herdr --session %s agent focus %s", r.sess, r.pane)
-		args := []string{"wsl.exe"}
-		if d := f.eng.WSLDistro(); d != "" {
-			args = append(args, "-d", d)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		var argv []string
+		if r.host == "windows" {
+			argv = []string{"herdr.exe"}
+			if r.sess != "default" {
+				argv = append(argv, "--session", r.sess)
+			}
+			argv = append(argv, "agent", "focus", r.pane)
+		} else {
+			ref, home := f.eng.SessionSocket(r.host, r.sess)
+			argv = []string{"wsl.exe"}
+			if d := f.eng.WSLDistro(); d != "" {
+				argv = append(argv, "-d", d)
+			}
+			argv = append(argv, herdr.WSLHerdrArgs(ref, home,
+				f.eng.WSLExtraPath(), "agent", "focus", r.pane)...)
 		}
-		args = append(args, "--", "sh", "-lc", inner)
-		cmd = exec.Command(args[0], args[1:]...)
-	}
-	// console children must not flash a window next to the tray
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000} // CREATE_NO_WINDOW
-	if err := cmd.Run(); err != nil {
-		f.debugf("focusAgent %s/%s: %v", r.sess, r.pane, err)
-	}
-	f.raiseHerdrWindow()
+		if _, err := proc.Run(ctx, argv, nil, ""); err != nil {
+			f.debugf("focusAgent %s/%s: %v", r.sess, r.pane, err)
+		}
+		f.raiseHerdrWindow()
+	}()
 }
 
 // raiseHerdrWindow brings an already-open herdr client window to the
