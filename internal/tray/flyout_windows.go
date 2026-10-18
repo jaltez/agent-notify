@@ -666,11 +666,13 @@ func (f *flyout) layout(areaW, areaH int32) ([]flyRow, []rowGeom, int32, int32) 
 		var rowH int32
 		for j, g := range rowGroups {
 			cx := flyPad + int32(j)*(colW+colGap)
+			cy := rowY
 			for _, rr := range g {
 				rh := rowHeight(rr, f.agentBlockH())
-				geoms = append(geoms, rowGeom{R: rr, X: cx, Y: rowY, W: colW, H: rh})
-				if rh > rowH {
-					rowH = rh
+				geoms = append(geoms, rowGeom{R: rr, X: cx, Y: cy, W: colW, H: rh})
+				cy += rh
+				if cy-rowY > rowH {
+					rowH = cy - rowY
 				}
 			}
 		}
