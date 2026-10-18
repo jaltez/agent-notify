@@ -30,18 +30,24 @@ const (
 	autoCloseDelay = 30 * time.Second
 	refreshEvery   = time.Second
 
-	sectionH       = 34
-	rowH           = 24 // summary / single-line rows
-	rowTitleH      = 30 // "Agent Notify" line
-	rowSubH        = 34 // counts line + state bar
-	sepAfterSum    = 14
-	titleH         = 24 // agent block: line 1 (title)
-	infoH          = 18 // agent block: line 2 (agent · project)
-	blockGap       = 12
-	agentBlockH    = titleH + infoH + blockGap
-	wheelStep      = 52 // px per wheel notch
-	activateGrace  = 600 * time.Millisecond
-	flyClassName   = "agent-notify-flyout"
+	sectionH      = 34
+	rowH          = 24 // summary / single-line rows
+	rowTitleH     = 30 // "Agent Notify" line
+	rowSubH       = 34 // counts line + state bar
+	sepAfterSum   = 14
+	titleH        = 24 // agent block: line 1 (title)
+	infoH         = 18 // agent block: line 2 (agent · project)
+	blockGap      = 12
+	agentBlockH   = titleH + infoH + blockGap
+	wheelStep     = 52 // px per wheel notch
+	activateGrace = 600 * time.Millisecond
+	flyClassName  = "agent-notify-flyout"
+
+	// columnar layout: sessions flow into columns; count follows the
+	// work area so one session per column is preferred when it fits
+	colGap         = 14
+	colMinW        = 230
+	colMaxW        = 400
 	wmAppToggle    = 0x8001 // WM_APP+1
 	wmAppRefresh   = 0x8002 // WM_APP+2
 	timerAutoclose = 1
@@ -139,12 +145,19 @@ type flyout struct {
 	contentH   int32
 	winH       int32
 	scrollable bool
+	// columnar layout (window thread): panel width, column geometry
+	width int32
+	cols  int32
+	colW  int32
+	areaW int32
+	areaH int32
 
 	// hover highlight (window thread): index into last-painted rows
 	hover    int32
 	hoverSet bool
 	tracking bool
 	mouseY   int32 // last cursor position, client coords
+	mouseX   int32
 	mouseSet bool
 	lastRows []flyRow
 	lastGeom []rowGeom
@@ -328,10 +341,12 @@ func (f *flyout) trackHover(lParam uintptr) {
 	}
 	my := int32(int16(uint32(lParam) >> 16))
 	f.mouseY = my
+	f.mouseX = int32(int16(uint32(lParam) & 0xFFFF))
 	f.mouseSet = true
+	mx, my := f.mouseX, f.mouseY+f.scroll
 	idx := int32(-1)
 	for i, g := range f.lastGeom {
-		if my >= g.y && my < g.y+g.h {
+		if mx >= g.X && mx < g.X+g.W && my >= g.Y && my < g.Y+g.H {
 			idx = int32(i)
 			break
 		}
@@ -363,8 +378,10 @@ func (f *flyout) clickRow(lParam uintptr) {
 		return
 	}
 	my := int32(int16(uint32(lParam) >> 16))
+	mx := int32(int16(uint32(lParam) & 0xFFFF))
+	my += f.scroll
 	for i, g := range f.lastGeom {
-		if my < g.y || my >= g.y+g.h {
+		if mx < g.X || mx >= g.X+g.W || my < g.Y || my >= g.Y+g.H {
 			continue
 		}
 		r := f.lastRows[i]
@@ -404,18 +421,19 @@ func (f *flyout) show() {
 	if r, _, err := procSystemParametersInfoW.Call(spiGetWorkArea, 0, uintptr(unsafe.Pointer(&area)), 0); r == 0 {
 		f.debugf("flyout show: work area query failed: %v", err)
 	}
-	_, contentH := f.rowsAndHeight()
+	f.areaW = area.Right - area.Left
+	f.areaH = area.Bottom - area.Top
+	_, _, w, contentH := f.layout(f.areaW, f.areaH)
 	f.scroll = 0
 	// as tall as the content, up to the top of the work area; beyond that
 	// the panel fills the work area and scrolls
-	maxH := area.Bottom - area.Top - 16
+	maxH := f.areaH - 16
 	scrollable := contentH > maxH
 	h := contentH
 	if scrollable {
 		h = maxH
 	}
 	f.winH = h
-	w := int32(flyWidth)
 	x := area.Right - w - 12
 	y := area.Bottom - h - 8
 	rgn, _, _ := procCreateRoundRectRgn.Call(0, 0, uintptr(w+1), uintptr(h+1), 14, 14)
@@ -524,7 +542,8 @@ func (f *flyout) notify() {
 }
 
 type rowGeom struct {
-	y, h int32
+	X, Y, W, H int32 // X/W absolute; Y in content coordinates (pre-scroll)
+	R          flyRow
 }
 
 // rows lays out the panel from the live view plus the user's collapse
@@ -549,17 +568,91 @@ func rowHeight(r flyRow, blockH int32) int32 {
 	return rowH
 }
 
-// rowsAndHeight returns the rows to paint and the matching panel height.
-func (f *flyout) rowsAndHeight() ([]flyRow, int32) {
+// layout assigns every row a rectangle for the columnar panel. The
+// two summary rows span the full width; sessions flow into as many
+// columns as the work area allows (one per session when it fits),
+// greedy-balanced by estimated height. Returns the rows, their
+// rectangles, the panel width, and the panel height.
+func (f *flyout) layout(areaW, areaH int32) ([]flyRow, []rowGeom, int32, int32) {
 	rows := f.rows()
-	h := int32(flyPad)
+	geoms := make([]rowGeom, 0, len(rows))
+
+	sessions := 0
 	for _, r := range rows {
-		h += rowHeight(r, f.agentBlockH())
-		if r.kind == rowSummarySub {
+		if r.kind == rowSession {
+			sessions++
+		}
+	}
+	avail := areaW - 2*flyPad
+	cols := int32(1)
+	for cols < int32(sessions) && (cols+1)*(colMinW+colGap)-colGap <= avail {
+		cols++
+	}
+	colW := (avail - (cols-1)*colGap) / cols
+	if colW > colMaxW {
+		colW = colMaxW
+	}
+	f.width = 2*flyPad + cols*colW + (cols-1)*colGap
+	f.cols = cols
+	f.colW = colW
+
+	// full-width header rows on top
+	h := int32(flyPad)
+	i := 0
+	for ; i < len(rows) && (rows[i].kind == rowSummary || rows[i].kind == rowSummarySub); i++ {
+		rh := rowHeight(rows[i], f.agentBlockH())
+		geoms = append(geoms, rowGeom{R: rows[i], X: flyPad, Y: h, W: avail, H: rh})
+		h += rh
+		if rows[i].kind == rowSummarySub {
 			h += sepAfterSum
 		}
 	}
-	return rows, h + flyPad
+	topH := h - flyPad
+
+	// one group per session: everything from a session header up to
+	// the next one
+	var groups [][]flyRow
+	cur := []flyRow{}
+	for ; i < len(rows); i++ {
+		if rows[i].kind == rowSession && len(cur) > 0 {
+			groups = append(groups, cur)
+			cur = []flyRow{}
+		}
+		cur = append(cur, rows[i])
+	}
+	if len(cur) > 0 {
+		groups = append(groups, cur)
+	}
+	if int32(len(groups)) < cols {
+		cols = int32(len(groups))
+		f.width = 2*flyPad + cols*colW + (cols-1)*colGap
+	}
+
+	colY := make([]int32, cols)
+	for _, g := range groups {
+		c := 0 // shortest column wins (greedy height balance)
+		for j := int32(1); j < cols; j++ {
+			if colY[j] < colY[c] {
+				c = int(j)
+			}
+		}
+		cx := flyPad + int32(c)*(colW+colGap)
+		for _, r := range g {
+			rh := rowHeight(r, f.agentBlockH())
+			geoms = append(geoms, rowGeom{
+				R: r, X: cx, Y: flyPad + topH + colY[c], W: colW, H: rh,
+			})
+			colY[c] += rh
+		}
+	}
+	var maxCol int32
+	for _, cy := range colY {
+		if cy > maxCol {
+			maxCol = cy
+		}
+	}
+	height := flyPad + topH + maxCol + flyPad
+	return rows, geoms, f.width, height
 }
 
 func (f *flyout) paint(hwnd windows.HWND) {
@@ -570,7 +663,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	}
 	defer procEndPaint.Call(uintptr(hwnd), uintptr(unsafe.Pointer(&ps)))
 
-	rows, h := f.rowsAndHeight()
+	rows, geoms, w, h := f.layout(f.areaW, f.areaH)
 	f.contentH = h
 	if f.scrollable {
 		f.clampScroll()
@@ -582,36 +675,31 @@ func (f *flyout) paint(hwnd windows.HWND) {
 			swpNoZorder   = 0x0004
 			swpNoActivate = 0x0010
 		)
-		procSetWindowPos.Call(uintptr(f.hwnd), 0, 0, 0, uintptr(flyWidth), uintptr(h),
+		procSetWindowPos.Call(uintptr(f.hwnd), 0, 0, 0, uintptr(w), uintptr(h),
 			swpNoMove|swpNoZorder|swpNoActivate)
 	}
 	bg, _, _ := procCreateSolidBrush.Call(uintptr(colorBG))
 	defer procDeleteObject.Call(bg)
 	border, _, _ := procCreateSolidBrush.Call(uintptr(colorBorder))
 	defer procDeleteObject.Call(border)
-	frame := RECT{0, 0, flyWidth, h}
+	frame := RECT{0, 0, w, h}
 	procFrameRectCall(hdc, frame, border)
-	client := RECT{1, 1, flyWidth - 1, h - 1}
+	client := RECT{1, 1, w - 1, h - 1}
 	procFillRect.Call(hdc, uintptr(unsafe.Pointer(&client)), bg)
 
 	procSetBkMode.Call(hdc, 1) // TRANSPARENT
 
 	clientH := f.winH
 	f.lastRows = rows
-	f.lastGeom = f.lastGeom[:0]
-	y := int32(flyPad) - f.scroll
-	for _, r := range rows {
-		rh := rowHeight(r, f.agentBlockH())
-		f.lastGeom = append(f.lastGeom, rowGeom{y: y + f.scroll, h: rh})
-		y += rh
-	}
+	f.lastGeom = geoms
 	// rows rebuilt (refresh, collapse, scroll): re-hit-test the stored
 	// cursor position so the highlight always marks the row actually
 	// under the mouse, never a stale index
 	if f.mouseSet {
+		mx, my := f.mouseX, f.mouseY+f.scroll
 		idx := int32(-1)
 		for i, g := range f.lastGeom {
-			if f.mouseY >= g.y && f.mouseY < g.y+g.h {
+			if mx >= g.X && mx < g.X+g.W && my >= g.Y && my < g.Y+g.H {
 				idx = int32(i)
 				break
 			}
@@ -621,13 +709,11 @@ func (f *flyout) paint(hwnd windows.HWND) {
 	}
 	for i, r := range rows {
 		g := f.lastGeom[i]
-		rh := g.h
-		y := g.y - f.scroll
+		rh, y := g.H, g.Y-f.scroll
+		x, w := g.X, g.W
 
 		hovered := f.hoverSet && f.hover == int32(i)
-		if y+rh >= flyPad-2 && y <= clientH { // clip to the visible band
-			x := int32(flyPad)
-			w := int32(flyWidth - flyPad*2)
+		if y+rh >= 0 && y <= clientH { // clip to the visible band
 			if r.kind == rowGroup || r.kind == rowAgentCompact {
 				x += 14 // nested rows sit inside their session header
 				w -= 14
@@ -662,14 +748,17 @@ func (f *flyout) paint(hwnd windows.HWND) {
 
 			if r.kind == rowSummarySub && len(r.bar) > 0 {
 				// fleet state bar: one segment per agent state, a margin
-				// below the counts text and above the next row
+				// below the counts text and above the next row; segments
+				// scale from the model's base width to the real one
+				const baseInner = flyWidth - 2*flyPad
 				bx := x
 				for _, seg := range r.bar {
+					sw := seg.px * w / baseInner
 					brush, _, _ := procCreateSolidBrush.Call(uintptr(seg.col))
-					bar := RECT{bx, y + rowH + 3, bx + seg.px, y + rowH + 7}
+					bar := RECT{bx, y + rowH + 3, bx + sw, y + rowH + 7}
 					procFillRect.Call(hdc, uintptr(unsafe.Pointer(&bar)), brush)
 					procDeleteObject.Call(brush)
-					bx += seg.px
+					bx += sw
 				}
 			}
 
@@ -718,7 +807,7 @@ func (f *flyout) paint(hwnd windows.HWND) {
 		maxScroll := f.contentH - clientH
 		thumbY := 4 + int32(float64(trackH-thumbH)*float64(f.scroll)/float64(maxScroll))
 		brush, _, _ := procCreateSolidBrush.Call(uintptr(0x00565656))
-		bar := RECT{flyWidth - 6, thumbY, flyWidth - 3, thumbY + thumbH}
+		bar := RECT{w - 6, thumbY, w - 3, thumbY + thumbH}
 		procFillRect.Call(hdc, uintptr(unsafe.Pointer(&bar)), brush)
 		procDeleteObject.Call(brush)
 	}

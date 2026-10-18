@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **Flyout: columnar layout**: sessions now flow side by side into as
+  many columns as the work area allows (one per session when it fits;
+  more sessions than columns balance greedily by height). Rows
+  hit-test in two dimensions, which also ends the stale hover
+  highlight after refreshes, collapses, and scrolls.
 - **Flyout: cursor, close, and layout polish**: the panel cursor was
   whatever the previous window left (sometimes an hourglass) because
   the window class registered no cursor; it is now an arrow. Auto-close
