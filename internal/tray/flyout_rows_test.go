@@ -173,3 +173,20 @@ func TestEmptyView(t *testing.T) {
 		t.Errorf("empty view should end with the placeholder row, got %v", texts(rows))
 	}
 }
+
+func TestGdiSafe(t *testing.T) {
+	cases := []struct{ in, want string }{
+		{"\U0001F3E0 README: basics", "README: basics"},                                     // leading emoji + space
+		{"README \u2699\uFE0F", "README"},                                                   // emoji + variation selector
+		{"▾ wsl/default \u00B7 pi \u00B7 Redise\u00F1ar", "▾ wsl/default · pi · Rediseñar"}, // keep chevrons, dots, accents
+		{"a\u200Db", "ab"},        // zero-width joiner
+		{"\u2B50 stars", "stars"}, // star
+		{"日本語 タスク", "日本語 タスク"},    // CJK passes
+		{"plain", "plain"},
+	}
+	for _, c := range cases {
+		if got := gdiSafe(c.in); got != c.want {
+			t.Errorf("gdiSafe(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}

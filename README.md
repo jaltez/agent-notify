@@ -230,6 +230,7 @@ The Windows binary is `windowsgui`: no console window. CLI subcommands
 | WSL sessions missing on Windows | `wsl.exe -e sh -c 'ls ~/.config/herdr'` must list sockets; non-default herdr paths need `herdr.wsl.extra_path`. |
 | WSL daemon service skipped | systemd off in the distro; set `[boot] systemd=true` in `/etc/wsl.conf`, run `wsl --shutdown`, re-run `setup --service`. |
 | `setup` can't enable the service on WSL | Same fix; `setup --status` shows whether a systemd user manager is reachable. |
+| Boxes (`□`) in flyout titles | Titles come from herdr and may contain emoji the panel font cannot draw; agent-notify strips them. The flyout title row shows the running version top-right if you suspect a stale binary. |
 | Setup wizard window closes instantly | It runs in `agent-notify-console.exe`; re-run `agent-notify setup` from any terminal instead. |
 | `no display available` | Headless box; use `run`/`monitor`, not the tray. |
 | Second tray icon | Not possible; a second instance refuses to start. |

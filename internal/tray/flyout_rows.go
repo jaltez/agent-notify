@@ -2,6 +2,7 @@ package tray
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/jaltez/agent-notify/internal/engine"
 	"github.com/jaltez/agent-notify/internal/icon"
@@ -66,6 +67,27 @@ func orDash(s string) string {
 	return s
 }
 
+// gdiSafe strips glyphs the flyout's Segoe UI text drawing renders as
+// tofu boxes: emoji, pictographs, variation selectors, and zero-width
+// joiners that herdr titles increasingly carry. Geometric shapes
+// (chevrons) and normal text pass through.
+func gdiSafe(s string) string {
+	clean := make([]rune, 0, len(s))
+	for _, r := range s {
+		switch {
+		case r >= 0x1F000 && r <= 0x1FAFF, // emoji & pictographs
+			r >= 0x2600 && r <= 0x27BF, // misc symbols, dingbats
+			r >= 0x2B00 && r <= 0x2BFF, // arrows, stars
+			r >= 0xFE00 && r <= 0xFE0F, // variation selectors
+			r >= 0x200B && r <= 0x200F, // zero-width, bidi marks
+			r == 0x200D, r == 0x20E3:   // ZWJ, keycap
+			continue
+		}
+		clean = append(clean, r)
+	}
+	return strings.TrimSpace(string(clean))
+}
+
 // buildRows lays out the flyout for a view. Session headers are always
 // present; a session expands by default only when it has working or
 // blocked agents. Finished (green) and resting agents each collapse
@@ -125,8 +147,8 @@ func buildRows(v engine.View, openState, restOpen map[string]bool) []flyRow {
 			rows = append(rows, flyRow{
 				kind: rowAgent,
 				dot:  colorRef(icon.Color(engine.RowSeverity(a.Status, a.Wants))),
-				text: orDash(title), // line 1: what it is doing
-				sub:  info,          // line 2: runner · project, dim
+				text: orDash(gdiSafe(title)), // line 1: what it is doing
+				sub:  gdiSafe(info),          // line 2: runner · project, dim
 			})
 		}
 		rows = appendGroup(rows, key+"/finished", "finished", finished, "waiting", restOpen)
@@ -161,7 +183,7 @@ func appendGroup(rows []flyRow, key, label string, agents []engine.AgentView, se
 		rows = append(rows, flyRow{
 			kind: rowAgentCompact,
 			dot:  colorRef(icon.Color(sev)),
-			text: orDash(title),
+			text: orDash(gdiSafe(title)),
 			dim:  true,
 		})
 	}
