@@ -25,7 +25,9 @@ exclude = []
 
 # Native herdr sockets: ~/.config/herdr/herdr.sock (session "default") and
 # ~/.config/herdr/sessions/<name>/herdr.sock. Auto = on when not running
-# natively on Windows.
+# natively on Windows. Remote hosts: `ssh -N -L` the remote socket into
+# sessions/<name>/herdr.sock and it is discovered here; see
+# docs/remote-sessions.md.
 [herdr.local]
 enabled    = "auto"
 poll       = "1s"

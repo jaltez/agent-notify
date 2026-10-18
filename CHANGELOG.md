@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- **Docs: remote herdr sessions** (`docs/remote-sessions.md`): watch herdr
+  on other hosts by `ssh -N -L` forwarding their sockets into
+  `~/.config/herdr/sessions/<name>/` (nothing installed on the remote),
+  with a systemd unit template and the caveats (WSL lifetime, PATH in
+  service units, version skew, Windows-side sockets). README and the
+  example config link to it.
 - **Green is now transition-latched**: a tray started over an
   already-idle fleet reads ⚪ gray (previously solid green from launch);
   🟢 shows only while an agent's observed finish (working → idle/done)
