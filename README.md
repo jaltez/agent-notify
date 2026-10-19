@@ -59,7 +59,7 @@ irm https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.p
 ```
 
 Installs into `%LOCALAPPDATA%\Programs\agent-notify`, adds it to PATH and
-creates a Startup shortcut. Options: `-NoAutostart`, `-Version v0.4.1`,
+creates a Startup shortcut. Options: `-NoAutostart`, `-Version v0.5.0`,
 `-WithWSL` (also installs the headless daemon inside the WSL distro as a
 systemd user service; `-WslDistro <name>` picks a non-default distro).
 Manual route: download `agent-notify_windows_amd64.zip` from the
