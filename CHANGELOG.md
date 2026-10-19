@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.5.0 (2026-10-19)
 
 - **Flyout: click an agent to focus it**: agent rows (full blocks
   and expanded compact rows) run herdr's server-side `agent focus`,
