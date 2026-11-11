@@ -1,111 +1,134 @@
-//! The flyout panel: the platform-neutral row model built from a View
-//! (`tray/flyout_rows.go`) plus the panel window itself (`tray/flyout_windows.go`
-//! Win32/GDI, re-created here as a cross-platform rune window — a documented
-//! improvement over the Go build, where the panel was Windows-only).
+//! The flyout panel, redesigned (v2): a single-column, rune-kit-rendered
+//! reinterpretation of the Go GDI panel. The first port painted the Go
+//! layout's fixed pixel rows with raw `el` boxes and inherited its
+//! cramped grid; this version keeps only the *interaction* contract
+//! (`tray/flyout_windows.go`: windowless app, show/hide without focus,
+//! 1 s refresh, 30 s auto-close with pointer re-arm, Escape/click-outside
+//! dismissal, agent-click focus) and rebuilds the surface from
+//! [`rune_kit::Kit`] tokens:
+//!
+//! - one state code — the tray icon's five colors (`icon::color`) —
+//!   carried by the header dot, the count chips, the proportional state
+//!   bar, and every row dot; only *blocked* rows get a tinted background.
+//! - sessions are custom collapsible triggers (kit glyphs, kit hover,
+//!   a11y button roles), defaulted open when they hold attention agents.
+//!   "N finished" / "N resting" groups collapse the settled agents.
+//! - sessions sort attention-first (blocked > working > waiting >
+//!   resting, offline last), agents the same way inside a session.
 //!
 //! RUNE MAPPING (verified against the vendored rune source at rev 003a5c7):
-//! the panel is a borderless, transparent, always-on-top rune window opened
-//! by a windowless [`rune::App`] (`AppHandle::open` on tray primary click —
-//! the `examples/launcher` pattern), driven by `AppSpec::poll` for the 1 s
-//! refresh cadence and the 30 s auto-close, `.scroll(ScrollSpec)` for wheel
-//! scrolling with a drawn thumb, `El::hover` for the row highlight, and
-//! `Tx::close_window` for Escape / click-outside / auto-close dismissal.
-//!
-//! Layout, row heights, colors and interaction ports `flyout_windows.go`
-//! faithfully; only the GDI painting idioms change (rune lays the same rows
-//! out with flex boxes instead of absolute pixel rectangles).
+//! borderless, transparent, always-on-top rune window opened by a
+//! windowless [`rune::App`] (the `examples/launcher` pattern), driven by
+//! `AppSpec::poll` for the refresh cadence, `.scroll(ScrollSpec)` for wheel
+//! scrolling, `Tx::close_window` for dismissal.
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use rune::el::ScrollSpec;
-use rune::tok::TextStyle;
 use rune::{
-    col, el, row, spacer, text, App, AppHandle, AppSpec, Color, Cx, Display, El, Key, Tx,
+    col, el, icon, row, spacer, text, App, AppHandle, AppSpec, Color, Cx, Display, El, Key, Tx,
 };
 use rune::{KeyEvent, NativeDisplayId, WindowOptions};
+use rune_kit::{Kit, PaletteSeed};
 
 use crate::engine::{self, View};
 use crate::icon;
 
 // ---------------------------------------------------------------------------
-// Row model (flyout_rows.go) — platform-neutral, unit tested
+// Panel model — the data the panel renders, unit tested
 // ---------------------------------------------------------------------------
 
-/// Panel geometry shared by the row model and the painter
-/// (`flyout_rows.go` consts). The state bar's segment widths are computed
-/// against this base width and scaled to the real one at paint time.
-pub const FLY_WIDTH: i32 = 420;
-pub const FLY_PAD: i32 = 14;
+/// Panel geometry: fixed-width single column (the Go grid scaled columns
+/// against a 1.5 aspect ratio; collapsibles do that compaction now).
+pub const FLY_WIDTH: f32 = 420.0;
+pub const FLY_PAD: f32 = 12.0;
 
-/// Classifies a flyout row; the painter picks layout, height, and
-/// interaction from it. The model itself is platform-neutral so it can be
-/// unit-tested anywhere (`tray.rowKind`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum RowKind {
-    /// fleet title line with severity dot.
-    Summary,
-    /// counts line with the fleet state bar.
-    SummarySub,
-    /// session header: chevron + counts, click toggles.
-    Session,
-    /// two-line attention block (dot + status wash).
-    Agent,
-    /// one collapsed-group agent on a single line.
-    AgentCompact,
-    /// "N finished"/"N resting" line, click toggles the group.
-    Group,
-    /// placeholder when nothing is known.
-    Empty,
-}
-
-/// One segment of the fleet state bar (pixel width precomputed,
-/// `tray.barSeg`).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct BarSeg {
-    pub col: u32,
-    pub px: i32,
-}
-
-/// One painted line (or block) of the flyout panel (`tray.flyRow`).
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct FlyRow {
-    pub kind: Option<RowKind>,
-    /// COLORREF; 0 = no dot (build with [`icon::Rgb::colorref`]).
-    pub dot: u32,
-    /// line 1 (agent blocks: the title).
-    pub text: String,
-    /// session rows: the host label; agent rows: host to open on.
+/// One agent line in the panel: a two-line attention block (working /
+/// blocked) or a compact single-line row inside an expanded group.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AgentItem {
     pub host: String,
-    /// agent rows: session name the agent belongs to.
     pub sess: String,
-    /// agent rows: herdr pane id, when the agent has one.
     pub pane: String,
-    /// line 2, agent blocks only (runner · project).
-    pub sub: String,
-    /// paint in the dim color.
-    pub dim: bool,
-    /// group key this row toggles ("" = inert).
-    pub toggle: String,
-    /// effective open state, toggle rows only.
+    /// What the agent is doing: herdr's title, or the project when untitled.
+    pub title: String,
+    /// "runner · project" (or just the runner) in the dim caption line.
+    pub meta: String,
+    /// The herdr client currently has this pane focused.
+    pub focused: bool,
+    /// Panel state word: "blocked" | "working" | "waiting" | "idle".
+    pub sev: &'static str,
+}
+
+/// A collapsed-by-default group of settled agents ("N finished" /
+/// "N resting", `tray.appendGroup`).
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupItem {
+    /// Rest-toggle key ("host/name/finished" | "host/name/resting").
+    pub key: String,
+    /// "finished" | "resting".
+    pub label: &'static str,
+    /// Icon-color key for the group dot.
+    pub sev: &'static str,
     pub open: bool,
-    /// state bar segments, rowSummarySub only.
+    pub agents: Vec<AgentItem>,
+}
+
+/// One session and its rows (`SessionView` reshaped for the panel).
+#[derive(Clone, Debug, PartialEq)]
+pub struct SessionSection {
+    /// Collapse-toggle key ("host/name").
+    pub key: String,
+    pub name: String,
+    pub host: String,
+    pub up: bool,
+    /// Effective open state (default + user override).
+    pub open: bool,
+    pub total: usize,
+    /// blocked + working agents, sorted attention-first.
+    pub active: Vec<AgentItem>,
+    /// Latched done agents ("N finished").
+    pub finished: Option<GroupItem>,
+    /// Everything settled and unlatched ("N resting").
+    pub resting: Option<GroupItem>,
+}
+
+/// One count chip in the header ("1 blocked"); the chip set doubles as the
+/// legend for the row-dot state code.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Chip {
+    pub label: String,
+    /// Icon-color key.
+    pub sev: &'static str,
+}
+
+/// One proportional segment of the fleet state bar.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct BarSeg {
+    /// Icon-color key ("blocked" | "down" | "working" | "waiting" | "idle").
+    pub sev: &'static str,
+    pub weight: f32,
+}
+
+/// The panel's data: header summary + session sections. Carries semantics
+/// only — rune's layout engine sizes everything (`buildRows` rethought).
+#[derive(Clone, Debug, PartialEq, Default)]
+pub struct PanelModel {
+    /// Fleet severity word (`View::severity`), colors the header dot.
+    pub fleet_sev: &'static str,
+    pub chips: Vec<Chip>,
     pub bar: Vec<BarSeg>,
+    pub sessions: Vec<SessionSection>,
+    /// Nothing known yet: render the invitation instead of sections.
+    pub empty: bool,
 }
 
 /// Renders an icon color in Windows COLORREF (BGR) layout
 /// (`tray.colorRef`).
 pub fn colorref(c: icon::Rgb) -> u32 {
     (c.r as u32) | ((c.g as u32) << 8) | ((c.b as u32) << 16)
-}
-
-fn plural_s(n: usize) -> &'static str {
-    if n == 1 {
-        ""
-    } else {
-        "s"
-    }
 }
 
 fn or_dash(s: &str) -> String {
@@ -116,69 +139,83 @@ fn or_dash(s: &str) -> String {
     }
 }
 
-/// Strips glyphs the Go flyout's Segoe UI text drawing renders as tofu
-/// boxes: emoji, pictographs, nerd-font Private Use Area icons, variation
-/// selectors, and zero-width joiners that herdr titles carry. Geometric
-/// shapes (chevrons) and normal text pass through (`tray.gdiSafe`,
-/// flyout_rows.go:77).
+/// Collapses runs of whitespace to single spaces (herdr titles carry
+/// newlines and tabs that must not break the single-line rows).
 ///
-/// PORT-NOTE: rune shapes text with Parley and renders emoji/pictographs
-/// fine, so the stripping is not *needed* here; it is kept byte-for-byte so
-/// the row model (and its tests) stays identical to the Go spec. The
-/// whitespace collapse (`strings.Fields` join) is preserved.
-pub fn gdi_safe(s: &str) -> String {
-    let clean: String = s
-        .chars()
-        .filter(|&r| {
-            !(matches!(r, '\u{1F000}'..='\u{1FAFF}')
-                || matches!(r, '\u{2600}'..='\u{27BF}')
-                || matches!(r, '\u{2B00}'..='\u{2BFF}')
-                || matches!(r, '\u{FE00}'..='\u{FE0F}')
-                || matches!(r, '\u{200B}'..='\u{200F}')
-                || matches!(r, '\u{E000}'..='\u{F8FF}')
-                || matches!(r, '\u{F0000}'..='\u{10FFFD}')
-                || r == '\u{200D}'
-                || r == '\u{20E3}')
-        })
-        .collect();
-    clean.split_whitespace().collect::<Vec<_>>().join(" ")
+/// PORT-NOTE: the Go painter's tofu-glyph stripping (`tray.gdiSafe`) is
+/// gone — rune shapes text with Parley and renders emoji/pictographs fine,
+/// so titles render as herdr sent them.
+fn flat_ws(s: &str) -> String {
+    s.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The expand/collapse marker for toggle rows (`tray.chevron`).
-fn chevron(open: bool) -> &'static str {
-    if open {
-        "▾"
+/// The agent's line-1 text: herdr's task title, or the project when the
+/// agent has no title (`buildRows`' title fallback).
+fn agent_title(a: &engine::AgentView) -> String {
+    if a.title.is_empty() {
+        a.project.clone()
     } else {
-        "▸"
+        a.title.clone()
     }
 }
 
-/// Summarizes a session's agents for its header, e.g.
-/// " · 1 working · 1 blocked"; danger first (`tray.tally`).
-fn tally(agents: &[engine::AgentView]) -> String {
-    let (mut blocked, mut working, mut waiting) = (0, 0, 0);
-    for a in agents {
-        match engine::row_severity(&a.status, a.wants) {
-            "blocked" => blocked += 1,
-            "working" => working += 1,
-            "waiting" => waiting += 1,
-            _ => {}
-        }
+/// The agent's line-2 text: "runner · project", or just the runner
+/// (buildRows' info line).
+fn agent_meta(a: &engine::AgentView) -> String {
+    if a.project.is_empty() {
+        a.name.clone()
+    } else {
+        format!("{} · {}", a.name, a.project)
     }
-    let mut out = String::new();
-    for (n, w) in [(blocked, "blocked"), (working, "working"), (waiting, "waiting")] {
-        if n > 0 {
-            out += &format!(" · {n} {w}");
-        }
-    }
-    out
 }
 
-/// Splits the panel's inner width across agent states: blocked, offline,
-/// working, waiting, then resting gray (`tray.stateBar`).
-fn state_bar(v: &View) -> Vec<BarSeg> {
-    const INNER: i32 = FLY_WIDTH - 2 * FLY_PAD;
-    let (mut blocked, mut down, mut working, mut waiting, mut total) = (0, 0, 0, 0, 0usize);
+/// The panel word for an agent state; the icon-color keys are the same
+/// words except resting, which paints the tray's idle gray.
+fn sev_word(status: &str, wants: bool) -> &'static str {
+    match engine::row_severity(status, wants) {
+        "blocked" => "blocked",
+        "working" => "working",
+        "waiting" => "waiting",
+        _ => "idle",
+    }
+}
+
+/// Attention rank for sorting: blocked first, working next, then latched
+/// finished, then resting.
+fn sev_rank(sev: &str) -> u8 {
+    match sev {
+        "blocked" => 0,
+        "working" => 1,
+        "waiting" => 2,
+        _ => 3,
+    }
+}
+
+/// Builds the panel model from a View and the user's collapse overrides
+/// (`tray.buildRows` in flyout_rows.go, rethought): sessions sort
+/// attention-first (min agent severity, offline last, name ties), agents
+/// sort the same way inside a session, a session expands by default only
+/// when it holds working or blocked agents, and finished/resting agents
+/// collapse into per-session group lines. `open_state` and `rest_open`
+/// hold the user's click overrides (session key "host/name"; group key
+/// "host/name/finished" | "host/name/resting").
+pub fn build_model(
+    v: &View,
+    open_state: &HashMap<String, bool>,
+    rest_open: &HashMap<String, bool>,
+) -> PanelModel {
+    let mut m = PanelModel {
+        fleet_sev: v.severity(),
+        ..PanelModel::default()
+    };
+    if v.sessions.is_empty() {
+        m.empty = true;
+        return m;
+    }
+
+    // fleet counts -> header chips (nonzero, severity order) + state bar
+    let (mut blocked, mut down, mut working, mut waiting, mut total) =
+        (0usize, 0usize, 0usize, 0usize, 0usize);
     for s in &v.sessions {
         if !s.up {
             down += 1;
@@ -194,198 +231,112 @@ fn state_bar(v: &View) -> Vec<BarSeg> {
             }
         }
     }
-    if total == 0 {
-        return Vec::new();
-    }
-    let idle = total - blocked - working - waiting;
-    let parts = [
-        (blocked, colorref(icon::color("blocked"))),
-        (down, colorref(icon::color("down"))),
-        (working, colorref(icon::color("working"))),
-        (waiting, colorref(icon::color("waiting"))),
-        (idle, colorref(icon::color("idle"))),
-    ];
-    let mut segs: Vec<BarSeg> = Vec::with_capacity(parts.len());
-    let mut used: i32 = 0;
-    for (n, col) in parts {
-        if n == 0 {
-            continue;
+    let resting = total.saturating_sub(blocked + working + waiting);
+    for (n, sev, label) in [
+        (blocked, "blocked", "blocked"),
+        (working, "working", "working"),
+        (waiting, "waiting", "waiting"),
+        (resting, "idle", "resting"),
+    ] {
+        if n > 0 {
+            m.chips.push(Chip {
+                label: format!("{n} {label}"),
+                sev,
+            });
         }
-        let mut px = (INNER as f64 * n as f64 / total as f64) as i32;
-        if px < 1 {
-            px = 1;
+    }
+    for (n, sev) in [
+        (blocked, "blocked"),
+        (down, "down"),
+        (working, "working"),
+        (waiting, "waiting"),
+        (resting, "idle"),
+    ] {
+        if n > 0 {
+            m.bar.push(BarSeg {
+                sev,
+                weight: n as f32,
+            });
         }
-        segs.push(BarSeg { col, px });
-        used += px;
     }
-    if let Some(last) = segs.last_mut() {
-        last.px += INNER - used; // last segment absorbs rounding
-    }
-    segs
-}
 
-/// Builds the flyout row model from a View and the user's collapse
-/// overrides (`tray.buildRows` in flyout_rows.go). Session headers are
-/// always present; a session expands by default only when it has working or
-/// blocked agents. Finished (green) and resting agents each collapse into a
-/// single per-session line; opened groups list their agents as compact
-/// single-line rows. `open_state` and `rest_open` hold the user's click
-/// overrides (session key, and group key "session/finished" or
-/// "session/resting").
-pub fn build_rows(
-    v: &View,
-    open_state: &HashMap<String, bool>,
-    rest_open: &HashMap<String, bool>,
-) -> Vec<FlyRow> {
-    let mut rows = vec![
-        FlyRow {
-            kind: Some(RowKind::Summary),
-            dot: colorref(icon::color(v.severity())),
-            text: "Agent Notify".to_string(),
-            ..FlyRow::default()
-        },
-        FlyRow {
-            kind: Some(RowKind::SummarySub),
-            text: v.summary(),
-            dim: true,
-            bar: state_bar(v),
-            ..FlyRow::default()
-        },
-    ];
-    if v.sessions.is_empty() {
-        rows.push(FlyRow {
-            kind: Some(RowKind::Empty),
-            text: "No herdr sessions seen yet; start a herdr session".to_string(),
-            dim: true,
-            ..FlyRow::default()
-        });
-        return rows;
-    }
+    // one section per session, grouped and sorted
+    let mut secs: Vec<SessionSection> = Vec::with_capacity(v.sessions.len());
     for s in &v.sessions {
         let key = format!("{}/{}", s.host, s.name);
         let (mut active, mut finished, mut resting) = (Vec::new(), Vec::new(), Vec::new());
         for a in &s.agents {
-            match engine::row_severity(&a.status, a.wants) {
-                "working" | "blocked" => active.push(a),
-                "waiting" => finished.push(a),
-                _ => resting.push(a),
-            }
-        }
-        let mut open = !active.is_empty();
-        if let Some(&o) = open_state.get(&key) {
-            open = o;
-        }
-        let state = if s.up { "" } else { " · offline" };
-        rows.push(FlyRow {
-            kind: Some(RowKind::Session),
-            text: format!("{} {}", chevron(open), s.name),
-            host: s.host.clone(),
-            sub: format!(
-                "{} agent{}{}{}",
-                s.agents.len(),
-                plural_s(s.agents.len()),
-                tally(&s.agents),
-                state
-            ),
-            dim: active.is_empty(),
-            toggle: key.clone(),
-            open,
-            ..FlyRow::default()
-        });
-        if !open {
-            continue;
-        }
-        for a in &active {
-            let (mut title, mut info) = (a.title.clone(), a.name.clone());
-            if !a.project.is_empty() {
-                if title.is_empty() {
-                    title = a.project.clone();
-                } else {
-                    info += &format!(" · {}", a.project);
-                }
-            }
-            rows.push(FlyRow {
-                kind: Some(RowKind::Agent),
-                dot: colorref(icon::color(engine::row_severity(&a.status, a.wants))),
-                text: or_dash(&gdi_safe(&title)), // line 1: what it is doing
-                sub: gdi_safe(&info),             // line 2: runner · project, dim
+            let item = AgentItem {
                 host: s.host.clone(),
                 sess: s.name.clone(),
                 pane: a.pane_id.clone(),
-                ..FlyRow::default()
-            });
+                title: flat_ws(&or_dash(&agent_title(a))),
+                meta: flat_ws(&agent_meta(a)),
+                focused: a.focused,
+                sev: sev_word(&a.status, a.wants),
+            };
+            match engine::row_severity(&a.status, a.wants) {
+                "working" | "blocked" => active.push(item),
+                "waiting" => finished.push(item),
+                _ => resting.push(item),
+            }
         }
-        append_group(
-            &mut rows,
-            &format!("{key}/finished"),
-            "finished",
-            &finished,
-            "waiting",
-            rest_open,
-            &s.host,
-            &s.name,
-        );
-        append_group(
-            &mut rows,
-            &format!("{key}/resting"),
-            "resting",
-            &resting,
-            "idle",
-            rest_open,
-            &s.host,
-            &s.name,
-        );
-    }
-    rows
-}
-
-/// Appends one collapsible group line and, when the group is open, one
-/// compact row per agent (dot in the group's severity color)
-/// (`tray.appendGroup`).
-#[allow(clippy::too_many_arguments)] // mirrors the Go signature 1:1
-fn append_group(
-    rows: &mut Vec<FlyRow>,
-    key: &str,
-    label: &str,
-    agents: &[&engine::AgentView],
-    sev: &str,
-    open: &HashMap<String, bool>,
-    host: &str,
-    sess: &str,
-) {
-    if agents.is_empty() {
-        return;
-    }
-    let is_open = open.get(key).copied().unwrap_or(false);
-    rows.push(FlyRow {
-        kind: Some(RowKind::Group),
-        dot: colorref(icon::color(sev)),
-        text: format!("{} {} {}", chevron(is_open), agents.len(), label),
-        dim: false, // normal weight: collapsibles must outweigh their rows
-        toggle: key.to_string(),
-        open: is_open,
-        ..FlyRow::default()
-    });
-    if !is_open {
-        return;
-    }
-    for a in agents {
-        let title = if a.title.is_empty() {
-            a.project.clone()
-        } else {
-            a.title.clone()
+        let by_attention = |x: &AgentItem, y: &AgentItem| {
+            sev_rank(x.sev)
+                .cmp(&sev_rank(y.sev))
+                .then_with(|| x.title.cmp(&y.title))
         };
-        rows.push(FlyRow {
-            kind: Some(RowKind::AgentCompact),
-            dot: colorref(icon::color(sev)),
-            text: or_dash(&gdi_safe(&title)),
-            dim: true,
-            host: host.to_string(),
-            sess: sess.to_string(),
-            pane: a.pane_id.clone(),
-            ..FlyRow::default()
+        active.sort_by(by_attention);
+        finished.sort_by(by_attention);
+        resting.sort_by(by_attention);
+
+        let open = open_state.get(&key).copied().unwrap_or(!active.is_empty());
+        let group =
+            |label: &'static str, sev: &'static str, agents: Vec<AgentItem>, tag: &str| -> Option<GroupItem> {
+                if agents.is_empty() {
+                    return None;
+                }
+                let gkey = format!("{key}/{tag}");
+                Some(GroupItem {
+                    open: rest_open.get(&gkey).copied().unwrap_or(false),
+                    key: gkey,
+                    label,
+                    sev,
+                    agents,
+                })
+            };
+        secs.push(SessionSection {
+            finished: group("finished", "waiting", finished, "finished"),
+            resting: group("resting", "idle", resting, "resting"),
+            key: key.clone(),
+            name: s.name.clone(),
+            host: s.host.clone(),
+            up: s.up,
+            open,
+            total: s.agents.len(),
+            active,
         });
     }
+    secs.sort_by(|x, y| {
+        section_rank(x)
+            .cmp(&section_rank(y))
+            .then_with(|| x.name.cmp(&y.name))
+    });
+    m.sessions = secs;
+    m
+}
+
+/// Session attention rank for sorting: the strongest agent state in the
+/// session; offline sessions sink below everything.
+fn section_rank(s: &SessionSection) -> u8 {
+    if !s.up {
+        return 9;
+    }
+    s.active
+        .iter()
+        .map(|a| sev_rank(a.sev))
+        .min()
+        .unwrap_or(4) // nothing in attention: below working, above offline
 }
 
 // ---------------------------------------------------------------------------
@@ -403,36 +354,28 @@ pub const REFRESH_EVERY: Duration = Duration::from_secs(1);
 // depends on it): a focus loss hides iff the panel held foreground, which
 // flyout_focus below reproduces directly.
 
-const SECTION_H: f32 = 28.0; // session header
-const ROW_H: f32 = 22.0; // summary / single-line rows
-const ROW_TITLE_H: f32 = 26.0; // "Agent Notify" line
-const ROW_SUB_H: f32 = 32.0; // counts line + state bar
-const SEP_AFTER_SUM: f32 = 10.0;
-const TITLE_H: f32 = 20.0; // agent block: line 1 (title)
-const INFO_H: f32 = 15.0; // agent block: line 2 (agent · project)
-const BLOCK_GAP: f32 = 8.0;
-const AGENT_BLOCK_H: f32 = TITLE_H + INFO_H + BLOCK_GAP;
-const COL_GAP: f32 = 24.0;
-const COL_MIN_W: f32 = 170.0;
-const COL_MAX_W: f32 = 300.0;
-const GRID_ROW_GAP: f32 = 14.0;
+/// Estimated part heights, in points, that [`metrics`] sums to size the
+/// window. The real layout is flex (rune measures text); these stay coarse
+/// because their only job is fitting the window to its content.
+const EST_TITLE_H: f32 = 26.0; // "Agent Notify" + version
+const EST_CHIPS_H: f32 = 22.0; // count chips row
+const EST_BAR_H: f32 = 5.0; // state bar
+const EST_HEADER_AIR: f32 = 26.0; // header gaps + divider
+const EST_TRIGGER_H: f32 = 30.0; // session header
+const EST_AGENT_H: f32 = 44.0; // two-line attention block
+const EST_GROUP_H: f32 = 26.0; // "N finished"/"N resting" trigger
+const EST_COMPACT_H: f32 = 22.0; // expanded group's agent line
+const EST_SECTION_GAP: f32 = 10.0; // between sessions
 
-/// The painted height of one row (`rowHeight`).
-pub fn row_height(kind: Option<RowKind>) -> f32 {
-    match kind {
-        Some(RowKind::Summary) => ROW_TITLE_H,
-        Some(RowKind::SummarySub) => ROW_SUB_H,
-        Some(RowKind::Session) => SECTION_H,
-        Some(RowKind::Agent) => AGENT_BLOCK_H,
-        _ => ROW_H,
-    }
+/// The panel's outer width, clamped to the work area (single column: the
+/// Go grid's column scoring is gone — collapsibles compact instead).
+fn panel_width(area_w: f32) -> f32 {
+    FLY_WIDTH.min((area_w - 16.0).max(280.0))
 }
 
-/// The grid the panel lays its session groups into (`flyout.layout`
-/// result): the two summary rows span the full width; session groups fill a
-/// columns × rows grid, picking the column count whose rectangle best
-/// matches a widescreen ratio (1.5) without overflowing the work area.
-pub struct Layout {
+/// Window sizing for the panel: full content height up to the work area,
+/// then it scrolls (`flyout.layout`'s width/height outcome, simplified).
+pub struct Metrics {
     /// Outer panel width in points.
     pub width: f32,
     /// Full content height in points (pre-clamp).
@@ -441,168 +384,52 @@ pub struct Layout {
     /// `area_h - 16`; beyond that the panel scrolls.
     pub window_h: f32,
     pub scrollable: bool,
-    pub col_w: f32,
-    /// Number of leading full-width rows (the summary pair).
-    pub header: usize,
-    /// Grid rows of session groups; each group lists row indices into the
-    /// row model, in paint order.
-    pub groups: Vec<Vec<Vec<usize>>>,
 }
 
-/// Ports `flyout.layout` (flyout_windows.go:702): arranges the panel as a
-/// scalable grid, scoring candidate column counts against the 1.5 aspect
-/// ratio. `area_w`/`area_h` are the work area in points.
-pub fn layout(rows: &[FlyRow], area_w: f32, area_h: f32) -> Layout {
-    let avail = area_w - 2.0 * FLY_PAD as f32;
-
-    // full-width header rows on top
-    let mut h = FLY_PAD as f32;
-    let mut header = 0;
-    while header < rows.len()
-        && matches!(rows[header].kind, Some(RowKind::Summary) | Some(RowKind::SummarySub))
-    {
-        h += row_height(rows[header].kind);
-        if rows[header].kind == Some(RowKind::SummarySub) {
-            h += SEP_AFTER_SUM;
-        }
-        header += 1;
-    }
-    let top_h = h - FLY_PAD as f32;
-
-    // one group per session: everything from a session header up to the
-    // next one
-    let mut groups: Vec<Vec<usize>> = Vec::new();
-    let mut cur: Vec<usize> = Vec::new();
-    for (i, r) in rows.iter().enumerate().skip(header) {
-        if r.kind == Some(RowKind::Session) && !cur.is_empty() {
-            groups.push(std::mem::take(&mut cur));
-        }
-        cur.push(i);
-    }
-    if !cur.is_empty() {
-        groups.push(cur);
-    }
-
-    let group_h = |g: &[usize]| -> f32 { g.iter().map(|&i| row_height(rows[i].kind)).sum() };
-
-    // candidate column counts: one session wide up to the widest the work
-    // area allows at readable column width
-    let mut max_cols = 1usize;
-    while max_cols < groups.len()
-        && ((max_cols as f32 + 1.0) * (COL_MIN_W + COL_GAP) - COL_GAP) <= avail
-    {
-        max_cols += 1;
-    }
-    let (mut best_cols, mut best_w, mut best_score) = (1usize, 0.0f32, f32::MAX);
-    for c in 1..=max_cols {
-        let mut col_w = (avail - (c as f32 - 1.0) * COL_GAP) / c as f32;
-        if col_w > COL_MAX_W {
-            col_w = COL_MAX_W;
-        }
-        if col_w < 140.0 {
-            continue; // unreadably narrow
-        }
-        let w = 2.0 * FLY_PAD as f32 + c as f32 * col_w + (c as f32 - 1.0) * COL_GAP;
-        let mut hgt = top_h;
-        let mut r = 0usize;
-        while r * c < groups.len() {
-            let end = ((r + 1) * c).min(groups.len());
-            let mut row_h = 0.0f32;
-            for g in &groups[r * c..end] {
-                let gh = group_h(g);
-                if gh > row_h {
-                    row_h = gh;
+/// Estimates the panel's content height from the model (`flyout.layout`'s
+/// bookkeeping, minus the grid: rune lays the rows out for real).
+pub fn metrics(m: &PanelModel, area_w: f32, area_h: f32) -> Metrics {
+    let width = panel_width(area_w);
+    let mut h = FLY_PAD * 2.0
+        + EST_TITLE_H
+        + EST_CHIPS_H
+        + EST_BAR_H
+        + EST_HEADER_AIR
+        + EST_SECTION_GAP;
+    if m.empty {
+        h += EST_TRIGGER_H;
+    } else {
+        for s in &m.sessions {
+            h += EST_TRIGGER_H;
+            if s.open {
+                h += s.active.len() as f32 * EST_AGENT_H;
+                for g in [&s.finished, &s.resting].into_iter().flatten() {
+                    h += EST_GROUP_H;
+                    if g.open {
+                        h += g.agents.len() as f32 * EST_COMPACT_H;
+                    }
                 }
             }
-            hgt += row_h + GRID_ROW_GAP;
-            r += 1;
-        }
-        hgt += FLY_PAD as f32 - GRID_ROW_GAP;
-        if w > area_w || hgt > area_h * 9.0 / 10.0 {
-            continue; // overflows: unusable
-        }
-        let score = (w / hgt - 1.5).abs();
-        if score < best_score {
-            best_score = score;
-            best_cols = c;
-            best_w = w;
+            h += EST_SECTION_GAP;
         }
     }
-    if best_w == 0.0 {
-        // nothing fits: widest grid, let the panel scroll
-        best_cols = max_cols;
-    }
-    let mut col_w = (avail - (best_cols as f32 - 1.0) * COL_GAP) / best_cols as f32;
-    if col_w > COL_MAX_W {
-        col_w = COL_MAX_W;
-    }
-    let width = 2.0 * FLY_PAD as f32 + best_cols as f32 * col_w + (best_cols as f32 - 1.0) * COL_GAP;
-
-    // place the groups: grid rows top-aligned, tallest group per row
-    let mut grid: Vec<Vec<Vec<usize>>> = Vec::new();
-    let mut row_y = FLY_PAD as f32 + top_h;
-    let mut r = 0usize;
-    while r * best_cols < groups.len() {
-        let end = ((r + 1) * best_cols).min(groups.len());
-        let row_groups = &groups[r * best_cols..end];
-        let mut row_h = 0.0f32;
-        let mut placed = Vec::with_capacity(row_groups.len());
-        for g in row_groups {
-            placed.push(g.clone());
-            let gh = group_h(g);
-            if gh > row_h {
-                row_h = gh;
-            }
-        }
-        grid.push(placed);
-        row_y += row_h + GRID_ROW_GAP;
-        r += 1;
-    }
-    let content_h = row_y - GRID_ROW_GAP + FLY_PAD as f32;
-    let max_h = (area_h - 16.0).max(1.0);
-    let scrollable = content_h > max_h;
-    Layout {
+    let max_h = (area_h - 16.0).max(120.0);
+    let scrollable = h > max_h;
+    Metrics {
         width,
-        content_h,
-        window_h: if scrollable { max_h } else { content_h },
+        content_h: h,
+        window_h: if scrollable { max_h } else { h },
         scrollable,
-        col_w,
-        header,
-        groups: grid,
     }
 }
 
 // ---------------------------------------------------------------------------
-// Palette (flyout_windows.go COLORREF values, 0x00BBGGRR)
+// Palette
 // ---------------------------------------------------------------------------
-
-/// Session host label (teal), panel background, border, session header
-/// band, text, dim text and neutral hover, straight from the Go painter.
-/// The literals are `srgb_decode(rgb/255)` of each COLORREF byte, kept as
-/// consts because rune's [`Color`] is linear-light; a test pins them
-/// against `rune::color::srgb_decode`.
-#[allow(clippy::excessive_precision)] // derived constants, not hand-written
-mod palette {
-    pub use rune::Color;
-    /// 0x00C8C87F — rgb(127, 200, 200).
-    pub const HOST: Color = Color { r: 0.212230757, g: 0.577580452, b: 0.577580452, a: 1.0 };
-    /// 0x00202020 — rgb(32, 32, 32).
-    pub const BG: Color = Color { r: 0.014443845, g: 0.014443845, b: 0.014443845, a: 1.0 };
-    /// 0x00453C3C — rgb(60, 60, 69).
-    pub const BORDER: Color = Color { r: 0.045186203, g: 0.045186203, b: 0.059511244, a: 1.0 };
-    /// 0x002B2B2B — rgb(43, 43, 43).
-    pub const BAND: Color = Color { r: 0.024157634, g: 0.024157634, b: 0.024157634, a: 1.0 };
-    /// 0x00F2F2F2 — rgb(242, 242, 242).
-    pub const TEXT: Color = Color { r: 0.887923121, g: 0.887923121, b: 0.887923121, a: 1.0 };
-    /// 0x00A0A0A0 — rgb(160, 160, 160).
-    pub const DIM: Color = Color { r: 0.351532638, g: 0.351532638, b: 0.351532638, a: 1.0 };
-    /// 0x00303030 — rgb(48, 48, 48).
-    pub const HOVER: Color = Color { r: 0.029556835, g: 0.029556835, b: 0.029556835, a: 1.0 };
-}
 
 /// A COLORREF (0x00BBGGRR) as an opaque rune [`Color`], sRGB-decoded into
-/// rune's linear-light working space so the Go painter's colors land
-/// byte-exact on screen.
+/// rune's linear-light working space (how `icon::color`'s bytes land on
+/// screen).
 fn col_of(c: u32) -> Color {
     Color {
         r: rune::color::srgb_decode((c & 0xFF) as f32 / 255.0),
@@ -612,48 +439,24 @@ fn col_of(c: u32) -> Color {
     }
 }
 
-/// Mixes a COLORREF over the panel background at ratio `t`; `hover` lifts
-/// the result toward white so the hovered row reads as selected
-/// (`blendColor`, flyout_windows.go:1144 — sRGB math kept exactly).
-fn blend_color_ref(dot: u32, t: f64, hover: bool) -> u32 {
-    const BG: f64 = 0x20 as f64; // panel background, each channel
-    let mix = |a: f64, b: f64| -> u8 { (a * (1.0 - t) + b * t + 0.5) as u8 };
-    let mut r = mix(BG, (dot & 0xFF) as f64);
-    let mut g = mix(BG, ((dot >> 8) & 0xFF) as f64);
-    let mut b = mix(BG, ((dot >> 16) & 0xFF) as f64);
-    if hover {
-        let lift = |v: u8| -> u8 { (v as f64 * (1.0 - 0.10) + 240.0 * 0.10 + 0.5) as u8 };
-        r = lift(r);
-        g = lift(g);
-        b = lift(b);
-    }
-    (r as u32) | ((g as u32) << 8) | ((b as u32) << 16)
+/// The five-state panel code — the tray icon's own palette
+/// (`icon::color`): blocked red, down amber, working blue, waiting green,
+/// idle gray. Panel and tray speak one visual language.
+fn sev_color(sev: &str) -> Color {
+    col_of(colorref(icon::color(sev)))
 }
 
-/// The whole-block status wash for an agent row: the dot color blended over
-/// the panel background at 10% (Go `blendColor(r.dot, 0.10, hovered)`).
-fn wash(dot: u32) -> Color {
-    col_of(blend_color_ref(dot, 0.10, false))
+/// The kit the panel renders with, from three seed colours: the deep
+/// neutral panel background, near-white text, and the working blue as
+/// accent. Status colours stay `icon::color`'s (see [`sev_color`]) — kit
+/// tokens carry everything else (text ramp, borders, hover).
+fn panel_kit() -> Kit {
+    Kit::from_palette(PaletteSeed {
+        bg: rune::color::hex("#1c1e22").expect("panel bg hex"),
+        fg: rune::color::hex("#e7eaee").expect("panel fg hex"),
+        accent: rune::color::hex("#3b82f6").expect("panel accent hex"),
+    })
 }
-
-/// Hover overlay drawn over an agent wash: white-ish at 10% alpha, which
-/// composites to the Go lift (`v*0.9 + 24`). PORT-NOTE: the lift math is
-/// exact in sRGB; rune blends overlays in linear light, so the hovered
-/// wash lands close to, not byte-exact on, the Go's.
-#[allow(clippy::excessive_precision)] // derived constant
-const WASH_HOVER: Color = Color {
-    r: 0.871367097, // srgb_decode(240/255)
-    g: 0.871367097,
-    b: 0.871367097,
-    a: 0.10,
-};
-
-// Type ramp: the Go painter's GDI fonts (Segoe UI -13/400, -13/600, -11/400,
-// -15/600) at the row heights they were centered in.
-const FONT_BODY: TextStyle = TextStyle::new(13.0, 400.0);
-const FONT_BOLD: TextStyle = TextStyle::new(13.0, 600.0);
-const FONT_SMALL: TextStyle = TextStyle::new(11.0, 400.0);
-const FONT_HEAD: TextStyle = TextStyle::new(15.0, 600.0);
 
 // ---------------------------------------------------------------------------
 // Work area (flyout show() bottom-right anchoring)
@@ -930,6 +733,9 @@ impl Flyout {
 pub(crate) struct FlyState {
     eng: Arc<engine::Engine>,
     me: AppHandle<FlyState>,
+    /// The kit the panel renders with (`FlyState` owns it so the view fn
+    /// stays a pure render of model + tokens).
+    kit: Kit,
     focus_agent: Arc<Mutex<Option<FocusAgentFn>>>,
     /// collapse state: session key -> user override; defaults live in
     /// `build_rows` (`flyout.openState`).
@@ -969,6 +775,7 @@ impl FlyState {
         FlyState {
             eng,
             me,
+            kit: panel_kit(),
             focus_agent,
             open_state: HashMap::new(),
             rest_open: HashMap::new(),
@@ -1006,27 +813,27 @@ fn flyout_poll(s: &mut FlyState, _now: f64, tx: &mut Tx) -> bool {
     // The engine view is read on the UI thread; Engine::view takes a
     // short-held mutex, so this is safe (flyout_windows.go header note).
     s.snapshot = s.eng.view();
-    let rows = build_rows(&s.snapshot, &s.open_state, &s.rest_open);
-    let fp = rows_fingerprint(&rows);
+    let model = build_model(&s.snapshot, &s.open_state, &s.rest_open);
+    let fp = model_fingerprint(&model);
     let changed = fp != s.last_fp;
     s.last_fp = fp;
 
-    let lay = layout(&rows, s.area.w_pts, s.area.h_pts);
+    let mt = metrics(&model, s.area.w_pts, s.area.h_pts);
     // refresh and in-panel collapse/expand change the content: keep the
     // window inside the work area and resize on the spot
-    if s.applied_size != Some((lay.width, lay.window_h)) {
-        tx.resize_window_instant((lay.width, lay.window_h));
-        let pos = s.area.bottom_right_px(lay.width, lay.window_h);
+    if s.applied_size != Some((mt.width, mt.window_h)) {
+        tx.resize_window_instant((mt.width, mt.window_h));
+        let pos = s.area.bottom_right_px(mt.width, mt.window_h);
         if s.applied_pos != Some(pos) {
             s.me.set_position(pos);
             s.applied_pos = Some(pos);
         }
-        s.applied_size = Some((lay.width, lay.window_h));
+        s.applied_size = Some((mt.width, mt.window_h));
     }
     if !s.armed_evaluated {
         s.armed_evaluated = true;
         // A scrollable panel stays open until dismissed (flyout.show).
-        s.autoclose_armed = !lay.scrollable;
+        s.autoclose_armed = !mt.scrollable;
     }
     if s.autoclose_armed
         && s.shown_at.is_some_and(|t| t.elapsed() >= AUTO_CLOSE_DELAY)
@@ -1076,262 +883,336 @@ const CONTENT_KEY: &str = "flyout-content";
 /// two full-width summary rows; then the session grid, wheel-scrollable
 /// with rune's own scrollbar thumb when the content overflows.
 fn flyout_view(s: &FlyState, _cx: &mut Cx<FlyState>) -> El {
-    let rows = build_rows(&s.snapshot, &s.open_state, &s.rest_open);
-    let lay = layout(&rows, s.area.w_pts, s.area.h_pts);
+    let model = build_model(&s.snapshot, &s.open_state, &s.rest_open);
+    let k = &s.kit;
 
-    let mut header_rows = col().w_full();
-    for (i, r) in rows.iter().enumerate().take(lay.header) {
-        header_rows = header_rows.child(header_row(r, i, lay.width));
-    }
-    header_rows = header_rows.child(el().h(SEP_AFTER_SUM)); // sepAfterSum
-
-    let mut grid = col().w_full().gap(GRID_ROW_GAP).items_start();
-    for row_groups in &lay.groups {
-        let mut gr = row().gap(COL_GAP).items_start();
-        for group in row_groups {
-            let mut g = col().w(lay.col_w);
-            for &i in group {
-                g = g.child(session_row_el(&rows[i], i));
-            }
-            gr = gr.child(g);
+    let mut body = col().w_full().gap(2.0);
+    if model.empty {
+        body = body.child(
+            row()
+                .key("empty")
+                .w_full()
+                .h(EST_TRIGGER_H)
+                .center_y()
+                .child(
+                    text("No herdr sessions yet — they show up here when herdr starts.")
+                        .font(k.ty.ui_compact)
+                        .color(k.c.text_muted)
+                        .truncate(),
+                ),
+        );
+    } else {
+        for (i, sec) in model.sessions.iter().enumerate() {
+            body = body.child(session_section(sec, i, k));
         }
-        grid = grid.child(gr);
     }
 
-    let content = col()
-        .key(CONTENT_KEY)
-        .w_full()
-        .h_full()
-        .scroll(ScrollSpec { stick_bottom: false })
-        .child(header_rows)
-        .child(grid);
-
+    let inner_w = panel_width(s.area.w_pts) - 2.0 * FLY_PAD;
     col()
         .key("panel")
         .w_full()
         .h_full()
-        .fill(palette::BG)
-        .border(1.0, palette::BORDER)
+        .fill(k.c.bg_base)
+        .border(1.0, k.c.border_muted)
         .radius(14.0)
         .clip_rounded(14.0)
-        .padding(FLY_PAD as f32)
+        .padding(FLY_PAD)
         .on_hover_change(|s: &mut FlyState, hovering: bool, _| {
             s.pointer_inside = hovering; // the auto-close re-arms while over the panel
         })
-        .child(content)
+        .child(
+            col()
+                .key(CONTENT_KEY)
+                .w_full()
+                .h_full()
+                .gap(10.0)
+                .scroll(ScrollSpec { stick_bottom: false })
+                .child(header_el(&model, inner_w, k))
+                .child(el().w_full().h(1.0).fill(k.c.border_muted))
+                .child(body),
+        )
 }
 
-/// The two full-width header rows (`rowSummary`, `rowSummarySub`).
-fn header_row(r: &FlyRow, _i: usize, panel_w: f32) -> El {
-    match r.kind {
-        Some(RowKind::Summary) => {
-            let mut line = row().h(ROW_TITLE_H).center_y().gap(8.0).child(dot(r.dot))
-                .child(
-                    text("Agent Notify")
-                        .font(FONT_HEAD.lh(ROW_TITLE_H))
-                        .color(palette::TEXT)
-                        .truncate(),
-                )
-                .child(spacer());
-            if crate::buildinfo::is_release() {
-                // stamp the build so a stale binary is visible at a glance
-                line = line.child(
-                    text(crate::buildinfo::VERSION)
-                        .font(FONT_SMALL.lh(ROW_TITLE_H))
-                        .color(palette::DIM)
-                        .truncate(),
-                );
-            }
-            line
-        }
-        Some(RowKind::SummarySub) => {
-            // text on top, state bar further down with air around it
-            // (paint(): text cell is rowH-4 tall, bar 4px at y+rowH+3)
-            let mut c = col().h(ROW_SUB_H);
-            c = c.child(
-                row()
-                    .h(ROW_H - 4.0)
-                    .center_y()
-                    .child(
-                        text(r.text.clone())
-                            .font(FONT_BODY.lh(ROW_H - 4.0))
-                            .color(palette::DIM)
-                            .truncate(),
-                    ),
-            );
-            c = c.child(el().h(7.0));
-            let mut bar = row().h(4.0);
-            if !r.bar.is_empty() {
-                // segments scale from the model's base width to the real one
-                let inner_w = panel_w - 2.0 * FLY_PAD as f32;
-                let base_inner = (FLY_WIDTH - 2 * FLY_PAD) as f32;
-                for seg in &r.bar {
-                    let sw = seg.px as f32 * inner_w / base_inner;
-                    bar = bar.child(el().w(sw.max(0.0)).h(4.0).fill(col_of(seg.col)));
-                }
-            }
-            c.child(bar)
-        }
-        _ => el(),
+/// The header: fleet dot + name (+ version stamp), the count chips — which
+/// double as the legend for the row dots — and the proportional state bar.
+fn header_el(m: &PanelModel, inner_w: f32, k: &Kit) -> El {
+    let mut c = col().w_full().gap(8.0);
+
+    let mut title = row()
+        .key("header-title")
+        .w_full()
+        .h(EST_TITLE_H)
+        .center_y()
+        .gap(8.0)
+        .child(el().size(10.0, 10.0).radius(5.0).fill(sev_color(m.fleet_sev)))
+        .child(text("Agent Notify").font(k.ty.ui_medium).color(k.c.text_base));
+    if crate::buildinfo::is_release() {
+        // stamp the build so a stale binary is visible at a glance
+        title = title.child(spacer()).child(
+            text(crate::buildinfo::VERSION)
+                .font(k.ty.small)
+                .color(k.c.text_faint),
+        );
     }
-}
+    c = c.child(title);
 
-/// Builds one row of the session grid, wiring hover, washes and clicks
-/// (`flyout.paint` per-row drawing + `clickRow`). `idx` keys the element.
-fn session_row_el(r: &FlyRow, idx: usize) -> El {
-    let h = row_height(r.kind);
-    match r.kind {
-        Some(RowKind::Session) => {
-            // session headers get a band so collapsibles outweigh the
-            // washed rows they contain
-            let mut row = row()
-                .key(format!("session:{}:{idx}", r.toggle))
-                .h(h)
-                .fill(palette::BAND)
-                .hover(palette::HOVER)
-                .center_y()
-                .child(
-                    text(r.text.clone())
-                        .font(FONT_BOLD.lh(h))
-                        .color(palette::TEXT)
-                        .truncate(),
-                );
-            if !r.host.is_empty() {
-                row = row.child(
-                    text(r.host.clone())
-                        .font(FONT_SMALL.lh(h))
-                        .color(palette::HOST)
-                        .truncate()
-                        .ml(6.0),
-                );
-            }
-            if !r.sub.is_empty() {
-                row = row.child(
-                    text(r.sub.clone())
-                        .font(FONT_SMALL.lh(h))
-                        .color(palette::DIM)
-                        .truncate()
-                        .ml(4.0),
-                );
-            }
-            // click toggles the session's expansion
-            let key = r.toggle.clone();
-            let open = r.open;
-            row.on_press_tx(move |s: &mut FlyState, _| {
-                let v = !open;
-                s.open_state.insert(key.clone(), v);
-            })
+    if !m.chips.is_empty() {
+        let mut chips = row()
+            .key("header-chips")
+            .w_full()
+            .h(EST_CHIPS_H)
+            .center_y()
+            .gap(6.0);
+        for ch in &m.chips {
+            chips = chips.child(chip_el(ch, k));
         }
-        Some(RowKind::Group) => {
-            // "N finished"/"N resting" line, click toggles the group
-            let key = r.toggle.clone();
-            let open = r.open;
-            row()
-                .key(format!("group:{}:{idx}", r.toggle))
-                .h(h)
-                .hover(palette::HOVER)
-                .center_y()
-                .gap(8.0)
-                .pl(14.0) // nested rows sit inside their session header
-                .child(dot(r.dot))
-                .child(
-                    text(r.text.clone())
-                        .font(FONT_BODY.lh(h))
-                        .color(if r.dim { palette::DIM } else { palette::TEXT })
-                        .truncate(),
-                )
-                .on_press_tx(move |s: &mut FlyState, _| {
-                    let v = !open;
-                    s.rest_open.insert(key.clone(), v);
-                })
-        }
-        Some(RowKind::Agent) => {
-            // whole-block wash: status color blended over the panel
-            agent_row_el(r, h, idx)
-        }
-        Some(RowKind::AgentCompact) => {
-            let hit = (r.host.clone(), r.sess.clone(), r.pane.clone());
-            row()
-                .key(format!("compact:{idx}"))
-                .h(h)
-                .hover(palette::HOVER)
-                .center_y()
-                .gap(8.0)
-                .pl(14.0) // nested rows sit inside their session header
-                .child(dot(r.dot))
-                .child(
-                    text(r.text.clone())
-                        .font(FONT_BODY.lh(h))
-                        .color(palette::DIM)
-                        .truncate(),
-                )
-                .on_press_tx(move |s: &mut FlyState, tx: &mut Tx| {
-                    focus_agent(s, tx, &hit.0, &hit.1, &hit.2);
-                })
-        }
-        _ => {
-            // rowEmpty placeholder
-            row()
-                .key(format!("empty:{idx}"))
-                .h(h)
-                .child(
-                    text(r.text.clone())
-                        .font(FONT_BODY.lh(h))
-                        .color(palette::DIM)
-                        .truncate(),
-                )
-        }
+        c = c.child(chips);
     }
+
+    if !m.bar.is_empty() {
+        let total: f32 = m.bar.iter().map(|s| s.weight).sum();
+        // integer pixel spans — the last segment absorbs the rounding (the
+        // Go bar's trick) so adjacent segments leave no seams
+        let mut widths: Vec<f32> = Vec::with_capacity(m.bar.len());
+        let mut used = 0.0f32;
+        for (i, seg) in m.bar.iter().enumerate() {
+            let w = if i + 1 == m.bar.len() {
+                (inner_w - used).max(0.0)
+            } else {
+                (seg.weight / total * inner_w).floor().max(1.0)
+            };
+            widths.push(w);
+            used += w;
+        }
+        let mut bar = row().w_full();
+        for (seg, w) in m.bar.iter().zip(&widths) {
+            bar = bar.child(el().w(*w).h(EST_BAR_H).fill(sev_color(seg.sev)));
+        }
+        c = c.child(
+            el()
+                .key("state-bar")
+                .w_full()
+                .h(EST_BAR_H)
+                .radius(2.5)
+                .clip_rounded(2.5)
+                .child(bar),
+        );
+    }
+    c
 }
 
-/// The two-line attention block: title over "runner · project", the whole
-/// block washed with the status color, click focuses the agent
-/// (`rowAgent` drawing + `focusAgent`).
-fn agent_row_el(r: &FlyRow, h: f32, idx: usize) -> El {
-    let hit = (r.host.clone(), r.sess.clone(), r.pane.clone());
-    let dim = r.dim;
+/// One count chip: state-tinted pill with a state-colored label.
+fn chip_el(c: &Chip, k: &Kit) -> El {
+    let color = sev_color(c.sev);
     row()
-        .key(format!("agent:{idx}"))
-        .h(h)
-        .radius(8.0)
-        .fill(wash(r.dot))
-        .hover(WASH_HOVER)
-        .child(
-            row()
-                .h(TITLE_H)
-                .center_y()
-                .gap(8.0)
-                .child(dot(r.dot))
-                .child(
-                    text(r.text.clone())
-                        .font(FONT_BODY.lh(TITLE_H))
-                        .color(if dim { palette::DIM } else { palette::TEXT })
-                        .truncate(),
-                ),
-        )
-        .child(
-            row()
-                .h(INFO_H)
-                .pl(17.0) // dot column (9px + 8px gap), as the Go text offset
-                .child(
-                    text(r.sub.clone())
-                        .font(FONT_SMALL.lh(INFO_H))
-                        .color(palette::DIM)
-                        .truncate(),
-                ),
-        )
-        .on_press_tx(move |s: &mut FlyState, tx: &mut Tx| {
-            focus_agent(s, tx, &hit.0, &hit.1, &hit.2);
-        })
+        .key(format!("chip:{}", c.label))
+        .h(20.0)
+        .radius(10.0)
+        .fill(k.alpha(color, 0.14))
+        .pl(8.0)
+        .center_y()
+        .child(text(c.label.clone()).font(k.ty.small_medium).color(color))
+        .child(el().w(8.0))
 }
 
-/// The severity dot: a 9px disc (`procEllipse` with d = 9).
-fn dot(colorref: u32) -> El {
-    if colorref == 0 {
-        el()
-    } else {
-        el().size(9.0, 9.0).radius(4.5).fill(col_of(colorref))
+/// One session: the collapsible trigger plus, when open, its attention
+/// blocks and settled groups (`flyout.paint`'s session group, restacked).
+fn session_section(sec: &SessionSection, idx: usize, k: &Kit) -> El {
+    let mut c = col().key(format!("section:{idx}")).w_full().gap(2.0);
+    c = c.child(session_trigger(sec, k));
+    if !sec.open {
+        return c;
     }
+    for (j, a) in sec.active.iter().enumerate() {
+        c = c.child(agent_row(a, format!("agent:{idx}:{j}"), k));
+    }
+    for g in [sec.finished.as_ref(), sec.resting.as_ref()]
+        .into_iter()
+        .flatten()
+    {
+        c = c.child(group_trigger(g, k));
+        if g.open {
+            for (j, a) in g.agents.iter().enumerate() {
+                c = c.child(compact_row(a, format!("compact:{idx}:{j}"), k));
+            }
+        }
+    }
+    c
+}
+
+/// The session trigger: kit disclosure glyph, session name, host, offline
+/// flag, agent count; kit hover and a11y button role (`rowSession`'s band).
+fn session_trigger(sec: &SessionSection, k: &Kit) -> El {
+    let glyph = if sec.open {
+        k.glyph.triangle_down
+    } else {
+        k.glyph.triangle_right
+    };
+    let key = sec.key.clone();
+    let open = sec.open;
+    let settled = sec.active.is_empty();
+    let mut t = row()
+        .key(format!("trigger:{}", sec.key))
+        .role("button")
+        .label(format!("session {} on {}", sec.name, sec.host))
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, k.c.border_focus)
+        .w_full()
+        .h(EST_TRIGGER_H)
+        .center_y()
+        .gap(8.0)
+        .pl(2.0)
+        .radius(k.radius.sm)
+        .child(
+            icon(glyph, 12.0).color(if sec.open {
+                k.c.icon_base
+            } else {
+                k.c.icon_weaker
+            }),
+        )
+        .child(
+            text(sec.name.clone())
+                .font(k.ty.ui_medium)
+                .color(if settled && !sec.open {
+                    k.c.text_muted
+                } else {
+                    k.c.text_base
+                })
+                .truncate(),
+        );
+    if !sec.host.is_empty() {
+        t = t.child(
+            text(sec.host.clone())
+                .font(k.ty.small)
+                .color(k.c.icon_weaker)
+                .truncate(),
+        );
+    }
+    if !sec.up {
+        t = t.child(text("offline").font(k.ty.small_medium).color(sev_color("down")));
+    }
+    t = t.child(spacer()).child(
+        text(format!(
+            "{} agent{}",
+            sec.total,
+            if sec.total == 1 { "" } else { "s" }
+        ))
+        .font(k.ty.small)
+        .color(k.c.text_faint),
+    );
+    k.interactive(t).on_press_tx(move |s: &mut FlyState, _| {
+        let v = !open;
+        s.open_state.insert(key.clone(), v);
+    })
+}
+
+/// The two-line attention block: state dot, task title over the
+/// "runner · project" caption. Only blocked rows get a tinted background —
+/// the alarm shouts, the rest whispers (`rowAgent` drawing, redesigned).
+fn agent_row(a: &AgentItem, key: String, k: &Kit) -> El {
+    let hit = (a.host.clone(), a.sess.clone(), a.pane.clone());
+    let color = sev_color(a.sev);
+    let mut blk = col().key(key).w_full().radius(k.radius.sm);
+    if a.sev == "blocked" {
+        blk = blk.fill(k.alpha(color, 0.10));
+    }
+    let mut meta = row()
+        .w_full()
+        .h(18.0)
+        .center_y()
+        .gap(6.0)
+        .pl(26.0) // dot column (8px dot + 10px gap) + the 8px row inset
+        .child(
+            text(a.meta.clone())
+                .font(k.ty.caption())
+                .color(k.c.text_muted)
+                .truncate(),
+        );
+    if a.focused {
+        meta = meta.child(text("✱").font(k.ty.caption()).color(sev_color("down")));
+    }
+    blk = blk
+        .child(
+            row()
+                .w_full()
+                .h(26.0)
+                .center_y()
+                .gap(10.0)
+                .pl(8.0)
+                .child(el().size(8.0, 8.0).radius(4.0).fill(color))
+                .child(
+                    text(a.title.clone())
+                        .font(k.ty.ui)
+                        .color(k.c.text_base)
+                        .truncate(),
+                )
+                .child(el().w(2.0)),
+        )
+        .child(meta);
+    k.interactive(blk).on_press_tx(move |s: &mut FlyState, tx: &mut Tx| {
+        focus_agent(s, tx, &hit.0, &hit.1, &hit.2);
+    })
+}
+
+/// The settled-agents group trigger ("N finished" / "N resting"): a ghost
+/// collapsible line (`appendGroup`'s group row).
+fn group_trigger(g: &GroupItem, k: &Kit) -> El {
+    let glyph = if g.open {
+        k.glyph.triangle_down
+    } else {
+        k.glyph.triangle_right
+    };
+    let key = g.key.clone();
+    let open = g.open;
+    let t = row()
+        .key(format!("group:{}", g.key))
+        .role("button")
+        .label(format!("{} {}", g.agents.len(), g.label))
+        .expanded(open)
+        .focusable(true)
+        .focus_ring(2.0, 0.0, k.c.border_focus)
+        .w_full()
+        .h(EST_GROUP_H)
+        .center_y()
+        .gap(8.0)
+        .pl(20.0) // nested rows sit inside their session header
+        .radius(k.radius.sm)
+        .child(icon(glyph, 10.0).color(k.c.icon_weaker))
+        .child(el().size(7.0, 7.0).radius(3.5).fill(sev_color(g.sev)))
+        .child(
+            text(format!("{} {}", g.agents.len(), g.label))
+                .font(k.ty.ui_compact)
+                .color(k.c.text_muted),
+        );
+    k.interactive(t).on_press_tx(move |s: &mut FlyState, _| {
+        let v = !open;
+        s.rest_open.insert(key.clone(), v);
+    })
+}
+
+/// One settled agent on a single line, inside an expanded group
+/// (the `AgentCompact` rows).
+fn compact_row(a: &AgentItem, key: String, k: &Kit) -> El {
+    let hit = (a.host.clone(), a.sess.clone(), a.pane.clone());
+    let t = row()
+        .key(key)
+        .w_full()
+        .h(EST_COMPACT_H)
+        .center_y()
+        .gap(10.0)
+        .pl(30.0) // group indent + dot column
+        .radius(k.radius.sm)
+        .child(el().size(7.0, 7.0).radius(3.5).fill(sev_color(a.sev)))
+        .child(
+            text(a.title.clone())
+                .font(k.ty.ui_compact)
+                .color(k.c.text_muted)
+                .truncate(),
+        );
+    k.interactive(t).on_press_tx(move |s: &mut FlyState, tx: &mut Tx| {
+        focus_agent(s, tx, &hit.0, &hit.1, &hit.2);
+    })
 }
 
 /// Agent click: close the panel, then run the injected focus callback off
@@ -1352,40 +1233,70 @@ fn focus_agent(s: &mut FlyState, tx: &mut Tx, host: &str, sess: &str, pane: &str
     }
 }
 
-/// Content fingerprint of a row model: identical output ⇒ identical
+/// Content fingerprint of a panel model: identical output ⇒ identical
 /// pixels, skip the view re-run (the flyout counterpart of the tray's
-/// `fingerprint`).
-fn rows_fingerprint(rows: &[FlyRow]) -> String {
+/// `fingerprint`). Includes the effective open states, so a 1 s refresh
+/// after a collapse still lands.
+fn model_fingerprint(m: &PanelModel) -> String {
     let mut b = String::new();
-    for r in rows {
+    b.push_str(&format!("|fleet:{}|empty:{}", m.fleet_sev, m.empty));
+    for c in &m.chips {
+        b.push_str(&format!("|chip:{}:{}", c.sev, c.label));
+    }
+    for s in &m.bar {
+        b.push_str(&format!("|bar:{}:{:.3}", s.sev, s.weight));
+    }
+    for sec in &m.sessions {
         b.push_str(&format!(
-            "|{:?}:{:x}:{text}:{host}:{sess}:{pane}:{sub}:{dim}:{toggle}:{open}",
-            r.kind,
-            r.dot,
-            text = r.text,
-            host = r.host,
-            sess = r.sess,
-            pane = r.pane,
-            sub = r.sub,
-            dim = r.dim,
-            toggle = r.toggle,
-            open = r.open,
+            "|sec:{key}:{total}:up={up}:open={open}",
+            key = sec.key,
+            total = sec.total,
+            up = sec.up,
+            open = sec.open,
         ));
-        for seg in &r.bar {
-            b.push_str(&format!(";{:x}/{px}", seg.col, px = seg.px));
+        for a in &sec.active {
+            b.push_str(&format!(
+                "|a:{pane}:{sev}:f={focused}:{title}",
+                pane = a.pane,
+                sev = a.sev,
+                focused = a.focused,
+                title = a.title,
+            ));
+        }
+        for g in [&sec.finished, &sec.resting].into_iter().flatten() {
+            b.push_str(&format!(
+                "|g:{key}:open={open}",
+                key = g.key,
+                open = g.open,
+            ));
+            for a in &g.agents {
+                b.push_str(&format!("|c:{}:{}", a.pane, a.title));
+            }
         }
     }
     b
 }
 
 // ---------------------------------------------------------------------------
-// Tests (flyout_rows_test.go) — platform-neutral row model
+// Tests — the panel model (redesign; replaces the flyout_rows_test.go port)
 // ---------------------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    fn agent(name: &str, status: &str, title: &str) -> engine::AgentView {
+        engine::AgentView {
+            name: name.into(),
+            status: status.into(),
+            title: title.into(),
+            pane_id: format!("p:{name}:{title}"),
+            ..engine::AgentView::default()
+        }
+    }
+
+    /// Four sessions covering every bucket: attention (working + latched
+    /// done + resting), all-resting, finished-only, and offline.
     fn view() -> View {
         View {
             sessions: vec![
@@ -1394,30 +1305,15 @@ mod tests {
                     name: "default".into(),
                     up: true,
                     agents: vec![
-                        engine::AgentView {
-                            name: "pi".into(),
-                            status: "working".into(),
-                            title: "Refine shapes".into(),
-                            project: "Nervefall".into(),
-                            ..engine::AgentView::default()
-                        },
-                        engine::AgentView {
-                            name: "omp".into(),
-                            status: "idle".into(),
-                            title: "old run".into(),
-                            ..engine::AgentView::default()
-                        },
-                        engine::AgentView {
-                            name: "omp".into(),
-                            status: "done".into(),
-                            title: "finished task".into(),
-                            ..engine::AgentView::default()
-                        },
+                        agent("pi", "working", "Refine shapes"),
+                        agent("omp", "idle", "old run"),
+                        agent("omp", "done", "finished task"),
                         engine::AgentView {
                             name: "pi".into(),
                             status: "done".into(),
                             wants: true,
                             title: "needs you".into(),
+                            pane_id: "p:needsyou".into(),
                             ..engine::AgentView::default()
                         },
                     ],
@@ -1427,18 +1323,8 @@ mod tests {
                     name: "quiet".into(),
                     up: true,
                     agents: vec![
-                        engine::AgentView {
-                            name: "pi".into(),
-                            status: "idle".into(),
-                            title: "resting one".into(),
-                            ..engine::AgentView::default()
-                        },
-                        engine::AgentView {
-                            name: "pi".into(),
-                            status: "idle".into(),
-                            title: "resting two".into(),
-                            ..engine::AgentView::default()
-                        },
+                        agent("pi", "idle", "resting one"),
+                        agent("omp", "idle", "resting two"),
                     ],
                 },
                 engine::SessionView {
@@ -1450,6 +1336,7 @@ mod tests {
                         status: "done".into(),
                         wants: true,
                         title: "freshly finished".into(),
+                        pane_id: "p:fresh".into(),
                         ..engine::AgentView::default()
                     }],
                 },
@@ -1457,290 +1344,274 @@ mod tests {
                     host: "wsl".into(),
                     name: "down".into(),
                     up: false,
-                    agents: vec![engine::AgentView {
-                        name: "pi".into(),
-                        status: "idle".into(),
-                        title: "gone".into(),
-                        ..engine::AgentView::default()
-                    }],
+                    agents: vec![agent("pi", "idle", "gone")],
                 },
             ],
         }
     }
 
-    fn texts(rows: &[FlyRow]) -> Vec<String> {
-        let mut out = Vec::with_capacity(rows.len());
-        for r in rows {
-            out.push(r.text.clone());
-            if !r.sub.is_empty() {
-                out.push(r.sub.clone());
-            }
-        }
-        out
+    fn model() -> PanelModel {
+        build_model(&view(), &HashMap::new(), &HashMap::new())
     }
 
-    fn find(rows: &[FlyRow], kind: RowKind, key: &str) -> FlyRow {
-        for r in rows {
-            if r.kind == Some(kind) && r.toggle == key {
-                return r.clone();
-            }
-        }
-        panic!("no {kind:?} row for {key:?} in {texts:?}", texts = texts(rows));
-    }
-
-    #[test]
-    fn only_working_keeps_full_rows() {
-        let rows = build_rows(&view(), &HashMap::new(), &HashMap::new());
-        let joined = texts(&rows).join("\n");
-        for want in [
-            "▾ default",
-            "Refine shapes",  // working block
-            "pi · Nervefall", // block second line
-            "▸ 1 finished",   // latched done collapses (green group)
-            "▸ 2 resting",    // idle + unlatched done
-            "▸ quiet",
-            "2 agents",
-            "▸ justdone", // finished-only session collapses
-            "1 agent · 1 waiting",
-            "▸ down",
-            "1 agent · offline",
-        ] {
-            assert!(joined.contains(want), "missing {want:?} in:\n{joined}");
-        }
-        for r in &rows {
-            if r.kind == Some(RowKind::Agent) && r.text.contains("needs you") {
-                panic!("finished agents must not get full blocks");
-            }
-            if r.kind == Some(RowKind::AgentCompact) {
-                panic!(
-                    "compact rows must not appear while groups are closed: {:?}",
-                    r.text
-                );
-            }
-        }
-        let s = find(&rows, RowKind::Session, "wsl/quiet");
-        assert!(
-            !s.open && s.dim,
-            "all-resting session must default to collapsed and dim"
-        );
-    }
-
-    #[test]
-    fn overrides_flip_defaults() {
-        let open_state = HashMap::from([("wsl/quiet".to_string(), true), ("wsl/default".to_string(), false)]);
-        let rows = build_rows(&view(), &open_state, &HashMap::new());
-
-        let q = find(&rows, RowKind::Session, "wsl/quiet");
-        assert!(q.open, "user override must expand the quiet session");
-        let compact = rows
+    fn sec<'a>(m: &'a PanelModel, key: &str) -> &'a SessionSection {
+        m.sessions
             .iter()
-            .filter(|r| r.kind == Some(RowKind::AgentCompact))
-            .count();
-        assert_eq!(
-            compact, 0,
-            "groups start closed: expected 0 compact rows, got {compact}"
-        );
-
-        let d = find(&rows, RowKind::Session, "wsl/default");
-        assert!(!d.open, "user override must collapse the active session");
-        for r in &rows {
-            if r.kind == Some(RowKind::Agent) && r.text.contains("Refine shapes") {
-                panic!("collapsed session must hide its attention blocks");
-            }
-        }
+            .find(|s| s.key == key)
+            .unwrap_or_else(|| panic!("no section {key:?} in {m:?}"))
     }
 
     #[test]
-    fn group_toggle_lists_compact_rows() {
+    fn sessions_sort_by_attention_then_name() {
+        let m = model();
+        let keys: Vec<&str> = m.sessions.iter().map(|s| s.key.as_str()).collect();
+        assert_eq!(
+            keys,
+            ["wsl/default", "wsl/justdone", "wsl/quiet", "wsl/down"],
+            "attention first, then settled sessions alphabetical, offline last"
+        );
+    }
+
+    #[test]
+    fn agents_sort_by_attention_within_session() {
+        let m = model();
+        let d = sec(&m, "wsl/default");
+        assert_eq!(d.active.len(), 1, "only the working agent is active");
+        assert_eq!(d.active[0].title, "Refine shapes");
+        let fin = d.finished.as_ref().expect("finished group exists");
+        assert_eq!(fin.label, "finished");
+        assert_eq!(fin.agents.len(), 1);
+        let rest = d.resting.as_ref().expect("resting group exists");
+        let titles: Vec<&str> = rest.agents.iter().map(|a| a.title.as_str()).collect();
+        assert_eq!(
+            titles,
+            ["finished task", "old run"],
+            "resting agents sorted by title"
+        );
+    }
+
+    #[test]
+    fn defaults_open_with_attention_closed_without() {
+        let m = model();
+        assert!(sec(&m, "wsl/default").open, "attention session defaults open");
+        assert!(
+            !sec(&m, "wsl/quiet").open,
+            "all-resting session defaults closed"
+        );
+        assert!(
+            !sec(&m, "wsl/justdone").open,
+            "finished-only session defaults closed"
+        );
+        assert!(!sec(&m, "wsl/down").open, "offline session defaults closed");
+    }
+
+    #[test]
+    fn open_state_overrides_flip_defaults() {
+        let open_state = HashMap::from([
+            ("wsl/quiet".to_string(), true),
+            ("wsl/default".to_string(), false),
+        ]);
+        let m = build_model(&view(), &open_state, &HashMap::new());
+        assert!(sec(&m, "wsl/quiet").open, "override expands the quiet session");
+        assert!(
+            !sec(&m, "wsl/default").open,
+            "override collapses the active session"
+        );
+    }
+
+    #[test]
+    fn group_overrides_flip_defaults() {
         let rest_open = HashMap::from([
             ("wsl/default/finished".to_string(), true),
             ("wsl/default/resting".to_string(), true),
         ]);
-        let rows = build_rows(&view(), &HashMap::new(), &rest_open);
-        let (mut finished, mut resting) = (0, 0);
-        for r in &rows {
-            if r.kind == Some(RowKind::Group) && r.toggle == "wsl/default/finished" {
-                assert!(
-                    r.text.starts_with('▾') && r.open,
-                    "finished group should read expanded, got {:?}",
-                    r.text
-                );
-            }
-            if r.kind == Some(RowKind::AgentCompact) {
-                if r.dot == colorref(icon::color("waiting")) {
-                    finished += 1;
-                } else {
-                    resting += 1;
-                }
-            }
-        }
-        assert_eq!(
-            (finished, resting),
-            (1, 2),
-            "compact rows: finished={finished} resting={resting}, want 1 and 2"
-        );
-    }
-
-    #[test]
-    fn state_bar_covers_all_agents() {
-        let rows = build_rows(&view(), &HashMap::new(), &HashMap::new());
-        let mut px = 0i32;
-        let mut segs = 0usize;
-        for r in &rows {
-            if r.kind == Some(RowKind::SummarySub) {
-                segs = r.bar.len();
-                for seg in &r.bar {
-                    px += seg.px;
-                }
-            }
-        }
-        assert_eq!(segs, 4, "bar segments = {segs}, want 4 (blocked, working, waiting, idle)");
-        const INNER: i32 = FLY_WIDTH - 2 * FLY_PAD;
-        assert_eq!(px, INNER, "bar width = {px}, want {INNER}");
-    }
-
-    #[test]
-    fn empty_view() {
-        let rows = build_rows(&View::default(), &HashMap::new(), &HashMap::new());
+        let m = build_model(&view(), &HashMap::new(), &rest_open);
+        let d = sec(&m, "wsl/default");
+        let fin = d.finished.as_ref().expect("finished group exists");
+        let rest = d.resting.as_ref().expect("resting group exists");
         assert!(
-            rows.len() == 3 && rows[2].kind == Some(RowKind::Empty),
-            "empty view should end with the placeholder row, got {texts:?}",
-            texts = texts(&rows)
+            fin.open && fin.agents.len() == 1,
+            "finished group expanded with 1 agent"
+        );
+        assert!(
+            rest.open && rest.agents.len() == 2,
+            "resting group expanded with 2 agents"
+        );
+        assert!(
+            !sec(&m, "wsl/quiet")
+                .resting
+                .as_ref()
+                .expect("quiet resting group")
+                .open,
+            "other sessions' groups default closed"
         );
     }
 
     #[test]
-    fn palette_consts_match_srgb_decode_of_the_go_colorrefs() {
-        for (c, want) in [
-            (0x00C8C87F, palette::HOST),
-            (0x00202020, palette::BG),
-            (0x00453C3C, palette::BORDER),
-            (0x002B2B2B, palette::BAND),
-            (0x00F2F2F2, palette::TEXT),
-            (0x00A0A0A0, palette::DIM),
-            (0x00303030, palette::HOVER),
-        ] {
-            let got = col_of(c);
-            for (g, w) in [(got.r, want.r), (got.g, want.g), (got.b, want.b)] {
-                assert!(
-                    (g - w).abs() < 1e-6,
-                    "palette 0x{c:06X} channel {g} != srgb_decode {w}"
-                );
-            }
-        }
+    fn chips_are_nonzero_and_severity_ordered() {
+        let m = model();
+        let labels: Vec<&str> = m.chips.iter().map(|c| c.label.as_str()).collect();
+        assert_eq!(
+            labels,
+            ["1 working", "2 waiting", "4 resting"],
+            "nonzero counts in severity order (no blocked in the fixture)"
+        );
     }
 
     #[test]
-    fn gdi_safe_strips_tofu_glyphs() {
-        let cases: [(&str, &str); 8] = [
-            (
-                "\u{F06A9} KA: Analyze and align ka agent repo",
-                "KA: Analyze and align ka agent repo",
-            ), // nerd-font PUA icon
-            ("π > \u{F0B63} README: basics", "π > README: basics"), // live title shape
-            ("README ⚙\u{FE0F}", "README"),                         // emoji + variation selector
-            (
-                "▾ wsl/default \u{B7} pi \u{B7} Rediseñar",
-                "▾ wsl/default · pi · Rediseñar",
-            ), // keep chevrons, dots, accents
-            ("a\u{200D}b", "ab"),        // zero-width joiner
-            ("\u{2B50} stars", "stars"), // star
-            ("日本語 タスク", "日本語 タスク"), // CJK passes
-            ("plain", "plain"),
-        ];
-        for (input, want) in cases {
-            let got = gdi_safe(input);
-            assert_eq!(got, want, "gdiSafe({input:?}) = {got:?}, want {want:?}");
+    fn state_bar_weights_cover_all_states() {
+        let m = model();
+        let total: f32 = m.bar.iter().map(|s| s.weight).sum();
+        assert_eq!(total, 8.0, "7 agents in up sessions + 1 down session");
+        let sevs: Vec<&str> = m.bar.iter().map(|s| s.sev).collect();
+        assert_eq!(
+            sevs,
+            ["down", "working", "waiting", "idle"],
+            "bar order blocked, down, working, waiting, idle — nonzero only"
+        );
+    }
+
+    #[test]
+    fn offline_sessions_flag_and_sink() {
+        let m = model();
+        let d = sec(&m, "wsl/down");
+        assert!(!d.up, "the session keeps its offline flag");
+        assert_eq!(
+            m.sessions.last().map(|s| s.key.as_str()),
+            Some("wsl/down"),
+            "offline sessions sink to the bottom"
+        );
+    }
+
+    #[test]
+    fn empty_view_is_the_invitation() {
+        let m = build_model(&View::default(), &HashMap::new(), &HashMap::new());
+        assert!(m.empty);
+        assert!(m.sessions.is_empty());
+        assert!(m.chips.is_empty());
+    }
+
+    #[test]
+    fn titles_collapse_whitespace_and_keep_glyphs() {
+        assert_eq!(flat_ws("a\n\tb  c"), "a b c");
+        assert_eq!(flat_ws("π > README: basics"), "π > README: basics");
+        assert_eq!(
+            flat_ws("README ⚙\u{FE0F}"),
+            "README ⚙\u{FE0F}",
+            "rune renders emoji; no stripping"
+        );
+        assert_eq!(flat_ws("日本語 タスク"), "日本語 タスク");
+    }
+
+    /// The smoke render's data: three sessions with every state, long
+    /// titles, a focused agent and an offline session — pixels over words.
+    fn smoke_view() -> View {
+        View {
+            sessions: vec![
+                engine::SessionView {
+                    host: "wsl".into(),
+                    name: "default".into(),
+                    up: true,
+                    agents: vec![
+                        engine::AgentView {
+                            name: "pi".into(),
+                            status: "working".into(),
+                            title: "ART: Fix snapshot corruption and policy drift in the watcher"
+                                .into(),
+                            project: "policy".into(),
+                            pane_id: "w1:p1".into(),
+                            focused: true,
+                            ..engine::AgentView::default()
+                        },
+                        engine::AgentView {
+                            name: "igno".into(),
+                            status: "blocked".into(),
+                            title: "Waiting on user: confirm the .amp gitignore addition".into(),
+                            project: "repo".into(),
+                            pane_id: "w1:p2".into(),
+                            ..engine::AgentView::default()
+                        },
+                        engine::AgentView {
+                            name: "dpb".into(),
+                            status: "working".into(),
+                            title: "Revive webpuy and comunit".into(),
+                            project: "web".into(),
+                            pane_id: "w1:p3".into(),
+                            ..engine::AgentView::default()
+                        },
+                        engine::AgentView {
+                            name: "omp".into(),
+                            status: "done".into(),
+                            wants: true,
+                            title: "Old run".into(),
+                            pane_id: "w1:p4".into(),
+                            ..engine::AgentView::default()
+                        },
+                        agent("ka", "idle", "Resting between runs"),
+                        agent("zed", "idle", "Idle"),
+                        agent("mia", "idle", "Idle"),
+                    ],
+                },
+                engine::SessionView {
+                    host: "windows".into(),
+                    name: "win".into(),
+                    up: true,
+                    agents: vec![
+                        engine::AgentView {
+                            name: "nt".into(),
+                            status: "working".into(),
+                            title: "Ship the release notes".into(),
+                            project: "docs".into(),
+                            pane_id: "w2:p1".into(),
+                            ..engine::AgentView::default()
+                        },
+                        agent("svc", "blocked", "Blocked on credentials"),
+                    ],
+                },
+                engine::SessionView {
+                    host: "wsl".into(),
+                    name: "remote".into(),
+                    up: false,
+                    agents: vec![agent("gone", "idle", "was here once")],
+                },
+            ],
         }
     }
 
-    /// One deterministic session for the smoke render below.
-    struct SmokeBackend;
-
-    impl crate::herdr::Backend for SmokeBackend {
-        fn name(&self) -> &'static str {
-            "local"
-        }
-        fn discover(&self, _timeout: Duration) -> anyhow::Result<Vec<crate::herdr::Session>> {
-            Ok(vec![crate::herdr::Session {
-                host: "wsl".into(),
-                name: "default".into(),
-                ..crate::herdr::Session::default()
-            }])
-        }
-        fn fetch(
-            &self,
-            _session: &crate::herdr::Session,
-            _timeout: Duration,
-        ) -> anyhow::Result<crate::herdr::Snapshot> {
-            Ok(crate::herdr::Snapshot {
-                agents: vec![
-                    crate::herdr::Agent {
-                        pane_id: "w1:p1".into(),
-                        name: "pi".into(),
-                        status: "working".into(),
-                        title: "Refine shapes".into(),
-                        project: "Nervefall".into(),
-                        ..crate::herdr::Agent::default()
-                    },
-                    crate::herdr::Agent {
-                        pane_id: "w1:p2".into(),
-                        name: "pi".into(),
-                        status: "blocked".into(),
-                        title: "Waiting on tests".into(),
-                        project: "Nervefall".into(),
-                        ..crate::herdr::Agent::default()
-                    },
-                    crate::herdr::Agent {
-                        pane_id: "w1:p3".into(),
-                        name: "omp".into(),
-                        status: "done".into(),
-                        title: "Old run".into(),
-                        ..crate::herdr::Agent::default()
-                    },
-                ],
-            })
-        }
-        fn rescan(&self) -> Duration {
-            Duration::ZERO
-        }
-    }
-
-    /// Smoke test: renders the panel headless to a PNG so the row painters
-    /// are verified with pixels, not just the model. Ignored by default
-    /// (needs a wgpu adapter — vulkan/lavapipe under WSLg); run it with
-    /// `cargo test -- --ignored smoke`.
+    /// Pixels, not just the model: renders the redesigned panel to a PNG.
+    /// Ignored by default (needs a wgpu adapter — vulkan/lavapipe under
+    /// WSLg); run it with `cargo test -- --ignored smoke`.
     #[test]
     #[ignore = "needs a wgpu adapter; run explicitly: cargo test -- --ignored smoke"]
     fn smoke_renders_the_panel_to_png() {
-        let eng = Arc::new(engine::Engine::with_backends(
-            engine::Config::default(),
-            vec![Box::new(SmokeBackend)],
-        ));
-        eng.probe_once();
-        assert!(!eng.view().sessions.is_empty(), "smoke engine must have a session");
-
         // A standalone app whose state is the panel's, pre-loaded with the
-        // engine view (poll is None here: the snapshot must survive).
+        // synthetic view (poll is None here: the snapshot must survive).
         let app0 = App::new(AppSpec::new(
             "agent-notify",
-            (420.0, 300.0),
+            (420.0, 560.0),
             flyout_init,
             flyout_view,
         ));
         let me = app0.handle();
         let state = FlyState {
-            snapshot: eng.view(),
+            snapshot: smoke_view(),
             area: WorkArea {
                 x_px: 0,
                 y_px: 0,
                 right_px: 420,
-                bottom_px: 300,
+                bottom_px: 560,
                 w_pts: 420.0,
-                h_pts: 300.0,
+                h_pts: 560.0,
                 scale: 1.0,
             },
-            ..FlyState::new(eng, me.clone(), Arc::new(Mutex::new(None)))
+            ..FlyState::new(
+                Arc::new(engine::Engine::with_backends(
+                    engine::Config::default(),
+                    Vec::new(),
+                )),
+                me.clone(),
+                Arc::new(Mutex::new(None)),
+            )
         };
         let app = app0.init(move || state);
         let snap = std::env::temp_dir().join("agent-notify-flyout-smoke.png");

@@ -91,7 +91,15 @@ impl View {
                 continue;
             }
             for a in &s.agents {
-                if a.status == herdr::STATUS_WORKING {
+                if a.status == herdr::STATUS_BLOCKED {
+                    // FIX(go-port): the Go switch (view.go:48) omits
+                    // StatusBlocked, so c.Blocked stayed 0 and Severity()
+                    // could never return "blocked" — the tray icon never
+                    // went red off severity and Summary never showed the
+                    // blocked count its own docstring promises. The panel
+                    // redesign's header dot exposed it; count it.
+                    c.blocked += 1;
+                } else if a.status == herdr::STATUS_WORKING {
                     c.working += 1;
                 } else if a.status == herdr::STATUS_IDLE || a.status == herdr::STATUS_DONE {
                     if a.wants {
@@ -1188,6 +1196,47 @@ mod tests {
     /// now.Add(i seconds), for the hysteresis test.
     fn now_plus(secs: u64) -> event::Time {
         event::Time { secs: now().secs + secs, nanos: 0 }
+    }
+
+    // ---- view.go Counts/Severity — see the FIX(go-port) note in counts() ----
+
+    #[test]
+    fn counts_and_severity_count_blocked() {
+        let v = View {
+            sessions: vec![SessionView {
+                host: "wsl".into(),
+                name: "s".into(),
+                up: true,
+                agents: vec![
+                    AgentView {
+                        name: "a".into(),
+                        status: "blocked".into(),
+                        pane_id: "p1".into(),
+                        ..AgentView::default()
+                    },
+                    AgentView {
+                        name: "b".into(),
+                        status: "working".into(),
+                        pane_id: "p2".into(),
+                        ..AgentView::default()
+                    },
+                    AgentView {
+                        name: "c".into(),
+                        status: "done".into(),
+                        wants: true,
+                        pane_id: "p3".into(),
+                        ..AgentView::default()
+                    },
+                ],
+            }],
+        };
+        let c = v.counts();
+        assert_eq!((c.blocked, c.working, c.waiting), (1, 1, 1));
+        assert_eq!(v.severity(), "blocked", "the tray must go red on blocked");
+        assert!(
+            v.summary().contains("1 blocked"),
+            "summary must carry the blocked count: {}", v.summary()
+        );
     }
 
     #[test]
