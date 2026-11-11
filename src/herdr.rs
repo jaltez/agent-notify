@@ -129,7 +129,9 @@ fn unwrap_value(mut doc: Value) -> Value {
 
 /// Maps a raw status string onto the known set (`herdr.NormalizeStatus`).
 pub fn normalize_status(s: &str) -> &'static str {
-    match s.trim().to_ascii_lowercase().as_str() {
+    // strings.ToLower is Unicode-aware in Go; match that rather than
+    // ASCII-only lowering.
+    match s.trim().to_lowercase().as_str() {
         STATUS_IDLE => STATUS_IDLE,
         STATUS_WORKING => STATUS_WORKING,
         STATUS_BLOCKED => STATUS_BLOCKED,
@@ -157,7 +159,8 @@ fn str_field(m: &serde_json::Map<String, Value>, keys: &[&str]) -> String {
 fn project_of(paths: &[String]) -> String {
     for p in paths {
         let p = p.replace('\\', "/");
-        let p = p.trim_matches('/');
+        // strings.TrimRight: trailing slashes only (Go herdr.go:137).
+        let p = p.trim_end_matches('/');
         if p.is_empty() {
             continue;
         }
@@ -252,9 +255,14 @@ impl Backend for Local {
         }
         let sdir = dir.join("sessions");
         if let Ok(entries) = std::fs::read_dir(&sdir) {
-            for ent in entries.flatten().filter(|e| {
-                e.file_type().map(|t| t.is_dir()).unwrap_or(false)
-            }) {
+            // os.ReadDir returns entries sorted by filename; read_dir makes
+            // no order guarantee, so sort to keep session order deterministic.
+            let mut dirs: Vec<std::fs::DirEntry> = entries
+                .flatten()
+                .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                .collect();
+            dirs.sort_by_key(|e| e.file_name());
+            for ent in dirs {
                 let sock = ent.path().join("herdr.sock");
                 if self.is_socket(&sock) {
                     out.push(Session {
@@ -272,12 +280,13 @@ impl Backend for Local {
     fn fetch(&self, session: &Session, timeout: Duration) -> anyhow::Result<Snapshot> {
         let mut reference = session.ref_.clone();
         if reference.is_empty() {
-            // the "default" session
-            reference = self
-                .dir
-                .as_ref()
-                .map(|d| d.join("herdr.sock").display().to_string())
-                .unwrap_or_default();
+            // the "default" session; Go's filepath.Join("", "herdr.sock")
+            // yields the relative path "herdr.sock" when home was
+            // unavailable, so replicate that rather than an empty ref.
+            reference = match &self.dir {
+                Some(d) => d.join("herdr.sock").display().to_string(),
+                None => "herdr.sock".to_string(),
+            };
         }
         let argv = vec![self.binary.clone(), "api".into(), "snapshot".into()];
         let env = vec![format!("HERDR_SOCKET_PATH={reference}")];
@@ -323,7 +332,8 @@ impl Windows {
                 });
             }
         }
-        anyhow::bail!("herdr.exe not found in PATH (tried {list:?})")
+        // Go's fmt %v on []string: "[herdr herdr.exe]" (windows.go:40).
+        anyhow::bail!("herdr.exe not found in PATH (tried [{}])", list.join(" "))
     }
 }
 
@@ -525,4 +535,82 @@ pub fn wsl_herdr_args(
     ];
     out.extend(args.iter().map(|s| (*s).to_string()));
     out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // herdr_test.go fixture: response envelope wrapping the snapshot.
+    const FIXTURE: &str = r#"{"id":"cli:api:snapshot","result":{"snapshot":{
+  "version":"0.8.2","protocol":20,
+  "agents":[
+    {"agent":"claude","agent_status":"working","cwd":"/home/dev/projects/api-server",
+     "foreground_cwd":"/home/dev/projects/api-server","focused":true,"pane_id":"w1:p1",
+     "terminal_title":"π : Refactor auth module","terminal_title_stripped":"Refactor auth module"},
+    {"agent":"codex","agent_status":"idle","cwd":"C:\\work\\website",
+     "foreground_cwd":"","focused":false,"pane_id":"w2:p3",
+     "terminal_title":"","terminal_title_stripped":""},
+    {"agent":"aide","agent_status":"Blocked","cwd":"","focused":false,"pane_id":"w3:p1"}
+  ]
+}}}"#;
+
+    #[test]
+    fn test_parse_snapshot() {
+        let snap = parse_snapshot(FIXTURE.as_bytes()).expect("parse");
+        assert_eq!(snap.agents.len(), 3, "agents = {}, want 3", snap.agents.len());
+        let a = &snap.agents[0];
+        assert!(
+            a.name == "claude"
+                && a.status == STATUS_WORKING
+                && a.title == "Refactor auth module"
+                && a.project == "api-server"
+                && a.pane_id == "w1:p1"
+                && a.focused,
+            "agent[0] mis-normalized: {a:?}"
+        );
+        let b = &snap.agents[1];
+        assert_eq!(b.project, "website"); // windows separator, foreground empty
+        let c = &snap.agents[2];
+        assert_eq!(c.status, STATUS_BLOCKED); // case-insensitive
+        assert!(
+            c.project.is_empty() && c.title.is_empty(),
+            "agent[2] should be empty: {c:?}"
+        );
+    }
+
+    #[test]
+    fn test_parse_snapshot_bare() {
+        // no envelope wrapping
+        parse_snapshot(br#"{"agents":[]}"#).expect("bare snapshot");
+    }
+
+    #[test]
+    fn test_session_from_socket() {
+        let cases: &[(&str, &str, &str)] = &[
+            ("/home/dev/.config/herdr/herdr.sock", "default", "/home/dev"),
+            ("/home/dev/.config/herdr/sessions/work/herdr.sock", "work", "/home/dev"),
+            ("/tmp/other/sock", "", ""), // unrecognized layout
+        ];
+        for (sock, want_name, want_home) in cases {
+            let (name, home) = session_from_socket(sock);
+            assert_eq!(
+                (name.as_str(), home.as_str()),
+                (*want_name, *want_home),
+                "sessionFromSocket({sock:?}) = {name:?},{home:?} want {want_name:?},{want_home:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_decode_utf16() {
+        let ascii = b"{\"agents\":[]}";
+        assert_eq!(proc::decode_utf16(ascii).as_ref(), ascii, "ascii mangled");
+        // "OK" as UTF-16LE with BOM
+        let le = [0xFF, 0xFE, 0x4F, 0x00, 0x4B, 0x00];
+        assert_eq!(proc::decode_utf16(&le).as_ref(), b"OK", "BOM decode");
+        // UTF-16LE without BOM (wsl.exe style)
+        let nb = b"{\x00\"\x00a\x00\"\x00";
+        assert_eq!(proc::decode_utf16(nb).as_ref(), b"{\"a\"", "no-BOM decode");
+    }
 }

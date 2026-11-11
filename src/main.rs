@@ -1,12 +1,15 @@
 //! agent-notify: tray notifier for AI coding agents (herdr today).
-//! Rust port scaffold — see the module docs for the port contract.
+//! Port of `main.go` plus the entry contract it shares with `cli.rs`.
 //!
-//! Companion Go tree lives in `internal/` until the port completes;
-//! module-by-module mapping is documented in each Rust file's header.
+//! - `cli::run` receives the full argv (Go: os.Args) and returns the
+//!   process exit code, which `main` exits with (os.Exit).
+//! - Port of `runtime.LockOSThread` (main.go): the tray and flyout windows
+//!   live on the main OS thread's message queue. Rust has no goroutine
+//!   scheduler, so the initial thread never migrates — the pin is
+//!   inherent. In `tray` mode the rune event loop takes over this thread
+//!   (`cli::cmd_tray` → `Tray::run`) and the engine/sinks run on their own
+//!   threads; in `run` (headless daemon) mode no rune UI is created at all.
 
-// Scaffold stage: the stub modules (sink, render, setup, update, tray,
-// flyout, cli) and the shared types are intentionally unused from `main`
-// until each port lands. Tighten this once the engine + tray are wired.
 #![allow(dead_code)]
 
 mod buildinfo;
@@ -25,11 +28,15 @@ mod tray;
 mod update;
 
 fn main() {
-    // The tray and flyout windows live on the main OS thread's message
-    // queue; rune's own run loop takes over the main thread once
-    // `rune::App::run` is called, so cli must not spawn windows off-thread.
+    // console_windows.go: windowsgui builds reattach to the parent console
+    // for CLI subcommands. This must run before the std writers are first
+    // used — std resolves its console handles lazily on first
+    // stdout/stderr use, so attaching here (before cli::run evaluates its
+    // arguments) lets probe/test/setup output reach the terminal the
+    // binary was launched from. See cli.rs's attach_parent_console note.
+    cli::attach_parent_console();
     let code = cli::run(
-        std::env::args().skip(1).collect(),
+        std::env::args().collect(),
         &mut std::io::stdout(),
         &mut std::io::stderr(),
     );

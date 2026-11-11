@@ -9,6 +9,14 @@ use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::time::{Duration, Instant};
 
+/// Applies the child-process attributes every spawned child must use
+/// (`proc.ChildSysProcAttr`): on Windows, suppress the child console window
+/// (the popup sink and the command sink spawn children the same way the
+/// herdr backends do).
+pub fn child_attrs(cmd: &mut Command) {
+    child_creation_flags(cmd);
+}
+
 /// Executes argv and returns stdout (`proc.Run`). `extra_env` entries are
 /// "KEY=VALUE" strings appended to the inherited environment. `dir` empty
 /// means inherit. `timeout` stands in for Go's `context.WithTimeout`: the

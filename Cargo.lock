@@ -95,6 +95,7 @@ dependencies = [
  "dirs",
  "flate2",
  "hex",
+ "libc",
  "png 0.18.1",
  "rune",
  "rune-kit",

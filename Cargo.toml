@@ -19,6 +19,9 @@ hex = "0.4"
 flate2 = "1"
 tar = "0.4"
 zip = { version = "6", default-features = false, features = ["deflate"] }
+# syscall.Kill for setup's platformStopInstances (Go: syscall.Kill);
+# localtime_r/localtime_s for the log sink's local "15:04:05" stamps.
+libc = "0.2"
 
 # rune: windowless tray/flyout app framework (pinned, vendored source read
 # under ~/.cargo/git/checkouts).
