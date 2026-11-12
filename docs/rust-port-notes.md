@@ -120,7 +120,7 @@ flytest was a no-op on non-Windows, it works on every platform.
   re-arm keeps long reads); session sort gained a host tiebreak so tabs
   order stably across refreshes.
 - **A regular window (2026-11-12)**: titled, resizable, min/max/close,
-  not topmost, taskbar icon (`rune::set_app_icon` with the working-blue
+  not topmost, taskbar icon (`rune::set_app_icon` with the working-yellow
   disc; on Windows it sets title bar, taskbar and Alt+Tab icons). Opening
   geometry (metrics size, centered) applies exactly once — afterwards the
   user owns the window. The chrome is **integrated**, not native: the
@@ -216,7 +216,7 @@ flytest was a no-op on non-Windows, it works on every platform.
   native Windows powershell.exe → pwsh.exe like Go). The third line (extra /
   fleet summary) folds into the body with `\n` (as the notify-send path) because
   the rune-notify toast has no third text line; the per-severity logo does not
-  exist on that path (the identity carries a fixed "working" blue disc);
+  exist on that path (the identity carries a fixed "working" yellow disc);
   per-severity logos remain on the PowerShell path (script byte-identical to
   Go, 1173 bytes verified). `Mode()` adds "native" to the Go values.
 - Manager: slog → `eprintln!` to stderr ("sink queue full; dropping event",
@@ -394,7 +394,7 @@ WSLg's system tray and most Linux panels do):
 Manual checklist:
 
 1. **Tray visible in WSLg** — icon appears; icon color follows severity
-   (working blue / waiting green / blocked red / down orange / idle gray).
+    (working yellow / waiting green / blocked red / down orange / idle gray).
 2. **Tooltip** — shows the live summary (e.g. "1 working · 1 waiting"; "all
    quiet" when idle).
 3. **Menu** — flat layout: summary item on top, session headers, agents as

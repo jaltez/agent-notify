@@ -547,8 +547,9 @@ fn sev_color(sev: &str) -> Color {
 }
 
 /// The kit the panel renders with, from three seed colours: the deep
-/// neutral panel background, near-white text, and the working blue as
-/// accent. Status colours stay `icon::color`'s (see [`sev_color`]) — kit
+/// neutral panel background, near-white text, and a blue UI accent (the
+/// state code lives in [`icon::color`] — working is yellow now, not blue).
+/// Status colours stay `icon::color`'s (see [`sev_color`]) — kit
 /// tokens carry everything else (text ramp, borders, hover).
 fn panel_kit() -> Kit {
     Kit::from_palette(PaletteSeed {
