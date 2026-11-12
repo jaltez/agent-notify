@@ -136,9 +136,9 @@ flytest was a no-op on non-Windows, it works on every platform.
   `titles: task` / `titles: tab` switches agent labels between herdr's
   task title and the colored tab name "<space> - #<n>" (project muted,
   pane accent — `title_parts` parses the pane id). The mode rides the
-  content fingerprint, so a toggle re-renders. Close and agent clicks
-  **hide** the window (`AppHandle::hide` retains it, so the user's resize
-  survives); the tray toggles show/hide.
+  content fingerprint, so a toggle re-renders. Close hides the window;
+  agent clicks keep it open (the fleet overview stays up while the client
+  jumps to the agent).
 - Go's `activateGrace` (600 ms) is gone with the flyover semantics — a
   regular window has no focus-loss dismissal to gate.
 - `gdiSafe` is kept byte-for-byte in the model (even though rune renders emoji

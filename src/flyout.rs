@@ -540,7 +540,7 @@ fn col_of(c: u32) -> Color {
 }
 
 /// The five-state panel code — the tray icon's own palette
-/// (`icon::color`): blocked red, down amber, working blue, waiting green,
+/// (`icon::color`): blocked red, down amber, working yellow, waiting green,
 /// idle gray. Panel and tray speak one visual language.
 fn sev_color(sev: &str) -> Color {
     col_of(colorref(icon::color(sev)))
@@ -1623,15 +1623,14 @@ fn title_parts(a: &AgentItem) -> (String, String) {
     (or_dash(&a.project), tab)
 }
 
-/// Agent click: hide the panel, then run the injected focus callback off
-/// the UI thread (`flyout.focusAgent`: hide, then go func).
+/// Agent click: run the injected focus callback off the UI thread
+/// (`flyout.focusAgent`'s `go func`). The panel **stays open** — the user
+/// keeps the fleet overview while the client jumps to the agent; only the
+/// ✕ button hides the window.
 fn focus_agent(s: &mut FlyState, _tx: &mut Tx, host: &str, sess: &str, pane: &str) {
     if pane.is_empty() {
         return;
     }
-    // Hide (not destroy): a regular window keeps its user-resized geometry
-    // for the next show (`flyout.focusAgent`'s hide, upgraded).
-    s.me.hide();
     let hit = AgentHit {
         host: host.to_string(),
         sess: sess.to_string(),

@@ -24,12 +24,12 @@ impl Rgb {
 }
 
 /// Severity colors: brand colors — blocked red, offline amber,
-/// waiting-for-you green, working blue, idle gray (`icon.severityColors`).
+/// waiting-for-you green, working yellow, idle gray (`icon.severityColors`).
 const SEVERITY_COLORS: [(&str, Rgb); 5] = [
     ("blocked", Rgb::new(0xE5, 0x48, 0x4D)),
     ("down", Rgb::new(0xFF, 0xB0, 0x2E)),
     ("waiting", Rgb::new(0x22, 0xC5, 0x5E)),
-    ("working", Rgb::new(0x3B, 0x82, 0xF6)),
+    ("working", Rgb::new(0xFF, 0xD6, 0x0A)),
     ("idle", Rgb::new(0x6B, 0x72, 0x80)),
 ];
 
