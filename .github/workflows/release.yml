@@ -22,7 +22,7 @@ jobs:
 
       - uses: dtolnay/rust-toolchain@stable
 
-      - name: Install linux link deps (rune: wayland client_system, xkbcommon)
+      - name: "Install linux link deps (rune: wayland client_system, xkbcommon)"
         run: sudo apt-get update && sudo apt-get install -y libxkbcommon-dev libwayland-dev
 
       - name: Build linux
