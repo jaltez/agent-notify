@@ -10,3 +10,10 @@ dist/
 .omp/
 .opencode/
 /target
+
+# release packaging outputs (CI builds these)
+/dist/
+/agent-notify_*.tar.gz
+/agent-notify_*.zip
+/checksums.txt
+/release-notes.md

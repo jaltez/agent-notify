@@ -30,8 +30,13 @@ jobs:
 
       - name: Build windows (gui twin + console twin)
         run: |
+          # gui build first: copy it out, then the console build overwrites
+          # the same output path and becomes the -console twin
           cargo build --release --target x86_64-pc-windows-gnu --features windowsgui
+          mkdir -p dist/win
+          cp target/x86_64-pc-windows-gnu/release/agent-notify.exe dist/win/agent-notify.exe
           cargo build --release --target x86_64-pc-windows-gnu
+          cp target/x86_64-pc-windows-gnu/release/agent-notify.exe dist/win/agent-notify-console.exe
         env:
           AGENT_NOTIFY_VERSION: ${{ github.ref_name }}
 
@@ -42,8 +47,6 @@ jobs:
           cp target/x86_64-unknown-linux-gnu/release/agent-notify dist/lin/
           cp README.md LICENSE CHANGELOG.md dist/lin/
           tar -czf agent-notify_linux_amd64.tar.gz -C dist/lin .
-          cp target/x86_64-pc-windows-gnu/release/agent-notify.exe dist/win/agent-notify.exe
-          cp target/x86_64-pc-windows-gnu/release/agent-notify.exe dist/win/agent-notify-console.exe
           cp README.md LICENSE CHANGELOG.md scripts/install.ps1 dist/win/
           (cd dist/win && zip -q ../../agent-notify_windows_amd64.zip *)
           sha256sum agent-notify_linux_amd64.tar.gz agent-notify_windows_amd64.zip > checksums.txt
