@@ -1,5 +1,8 @@
 name: release
 
+# Builds the Rust binaries and publishes a goreleaser-shaped release
+# (same archive names and checksums.txt the installers and in-app
+# self-update consume).
 on:
   push:
     tags: ["v*"]
@@ -12,15 +15,46 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
         with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v5
-        with:
-          go-version-file: go.mod
-      - uses: goreleaser/goreleaser-action@v6
-        with:
-          distribution: goreleaser
-          version: "~> v2"
-          args: release --clean
+          targets: x86_64-pc-windows-gnu
+
+      - name: Install mingw-w64 (windows-gnu linker)
+        run: sudo apt-get update && sudo apt-get install -y mingw-w64
+
+      - name: Build linux
+        run: cargo build --release --target x86_64-unknown-linux-gnu
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          AGENT_NOTIFY_VERSION: ${{ github.ref_name }}
+
+      - name: Build windows (gui twin + console twin)
+        run: |
+          cargo build --release --target x86_64-pc-windows-gnu --features windowsgui
+          cargo build --release --target x86_64-pc-windows-gnu
+        env:
+          AGENT_NOTIFY_VERSION: ${{ github.ref_name }}
+
+      - name: Package (agent-notify_<os>_<arch> archives + checksums.txt)
+        run: |
+          set -euo pipefail
+          mkdir -p dist/lin dist/win
+          cp target/x86_64-unknown-linux-gnu/release/agent-notify dist/lin/
+          cp README.md LICENSE CHANGELOG.md dist/lin/
+          tar -czf agent-notify_linux_amd64.tar.gz -C dist/lin .
+          cp target/x86_64-pc-windows-gnu/release/agent-notify.exe dist/win/agent-notify.exe
+          cp target/x86_64-pc-windows-gnu/release/agent-notify.exe dist/win/agent-notify-console.exe
+          cp README.md LICENSE CHANGELOG.md scripts/install.ps1 dist/win/
+          (cd dist/win && zip -q ../../agent-notify_windows_amd64.zip *)
+          sha256sum agent-notify_linux_amd64.tar.gz agent-notify_windows_amd64.zip > checksums.txt
+          # the new section: from its "## x.y.z" heading to the next one
+          awk '/^## /{n++} n==2{exit} n>=1' CHANGELOG.md > release-notes.md
+
+      - name: Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            agent-notify_linux_amd64.tar.gz
+            agent-notify_windows_amd64.zip
+            checksums.txt
+          body_path: release-notes.md

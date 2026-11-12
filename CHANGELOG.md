@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.6.0 (2026-11-12)
+
+**The Rust port.** agent-notify is now a single Rust binary on
+[rune](https://github.com/anomalyco/rune) — every module of the Go tree
+(tray, flyout, engine, herdr, sinks, setup, update, cli) is ported and
+unit-tested (98 tests; the Go tree stays untouched for reference). Notes
+on every deviation live in `docs/rust-port-notes.md`.
+
+Highlights of the redesigned panel (it is a real window now, not a
+flyover):
+
+- **Session grid + tabs**: an overview tab lays sessions out in a
+  columns × rows grid that spreads as the fleet grows; each session has
+  a full-width tab. Collapse-all / expand-all buttons fold the whole
+  fleet at once.
+- **Regular window**: centered, resizable, maximizable — with
+  integrated chrome (drawn minimize / maximize(restore) / close, the
+  header drags the window) and the agent disc as its taskbar icon.
+- **Agent click focus again**: clicks run `herdr agent focus`, and the
+  window raise prefers the clicked session's client — several terminals
+  running herdr clients no longer swallow the focus (Windows raises
+  natively; elsewhere over PowerShell interop).
+- **Real tab names**: titles can show herdr's tab labels
+  (`agent-notify - #test`) instead of task titles; the toggle
+  (`Aa task / Aa tab`) is persisted across restarts.
+- **Click-safe tray pulse**: on Windows the attention pulse animates the
+  tooltip instead of recreating the icon, which used to swallow clicks
+  and right-clicks.
+- Session cards with airy spacing, a state bar with margins, and the
+  release ships both `agent-notify.exe` (windowsgui) and the installer's
+  `agent-notify-console.exe` twin, same archive names as before —
+  `install.ps1` / `install.sh` and in-app self-update keep working.
+
+Known gaps (documented in the port notes): Windows has never been
+exercised beyond this repo's manual runs, the macOS tray needs a rune
+backend that does not exist yet, and three low-severity parity findings
+stay open (engine diagnostics, `look_path` exec bit, timeout error text).
+
 ## 0.5.0 (2026-10-19)
 
 - **Flyout: click an agent to focus it**: agent rows (full blocks
