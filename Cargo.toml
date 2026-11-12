@@ -1,0 +1,52 @@
+[package]
+name = "agent-notify"
+version = "0.5.0"
+edition = "2024"
+description = "Agent state notifications: Rust port scaffolding (go agent-notify -> rune)"
+license = "MIT"
+
+[features]
+# Release builds: the shipped `agent-notify.exe` is a windowsgui binary
+# (no console flash when launched from Explorer); the console twin for the
+# installer is the same source built without this feature.
+windowsgui = []
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.9"
+anyhow = "1"
+thiserror = "2"
+png = "0.18"
+dirs = "6"
+ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+# -EncodedCommand payload for the flyout focus raise (UTF-16LE base64).
+base64 = "0.22"
+sha2 = "0.10"
+hex = "0.4"
+flate2 = "1"
+tar = "0.4"
+zip = { version = "6", default-features = false, features = ["deflate"] }
+# syscall.Kill for setup's platformStopInstances (Go: syscall.Kill);
+# localtime_r/localtime_s for the log sink's local "15:04:05" stamps.
+libc = "0.2"
+
+# rune: windowless tray/flyout app framework (pinned, vendored source read
+# under ~/.cargo/git/checkouts).
+rune = { git = "https://github.com/anomalyco/rune", rev = "003a5c70c5f9805eae86ebb35adf965aa262c5aa" }
+rune-kit = { git = "https://github.com/anomalyco/rune", rev = "003a5c70c5f9805eae86ebb35adf965aa262c5aa" }
+rune-notify = { git = "https://github.com/anomalyco/rune", rev = "003a5c70c5f9805eae86ebb35adf965aa262c5aa" }
+
+[target.'cfg(target_os = "windows")'.dependencies]
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_UI_Shell",
+    "Win32_System_Registry",
+    "Win32_System_Threading",
+    "Win32_System_Console",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_Storage_FileSystem",
+    "Win32_System_SystemInformation",
+] }
