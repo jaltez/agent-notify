@@ -216,7 +216,7 @@ flytest was a no-op on non-Windows, it works on every platform.
   native Windows powershell.exe → pwsh.exe like Go). The third line (extra /
   fleet summary) folds into the body with `\n` (as the notify-send path) because
   the rune-notify toast has no third text line; the per-severity logo does not
-  exist on that path (the identity carries a fixed "working" yellow disc);
+  exist on that path (the identity carries a fixed agent-tile icon (working-yellow prompt));
   per-severity logos remain on the PowerShell path (script byte-identical to
   Go, 1173 bytes verified). `Mode()` adds "native" to the Go values.
 - Manager: slog → `eprintln!` to stderr ("sink queue full; dropping event",

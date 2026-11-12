@@ -1,8 +1,9 @@
-//! Renders the severity-colored disc used for the tray icon and toast logo.
-//! Port of `internal/icon/icon.go`: generates bytes directly (32bpp DIB ICO
-//! for LoadImage on Windows, PNG elsewhere) with no image assets, plus raw
-//! straight-RGBA rasters for [`rune::TrayIcon`], which wants pixels, not
-//! files.
+//! Renders the agent-tile icon used for the tray icon and toast logo.
+//! Port of `internal/icon/icon.go`, redesigned for v0.6: a dark rounded
+//! tile with a gray border and the terminal prompt `>_` stroked in the
+//! severity color — generated as pixels (32bpp DIB ICO for LoadImage on
+//! Windows, PNG elsewhere) with no image assets, plus raw straight-RGBA
+//! rasters for [`rune::TrayIcon`], which wants pixels, not files.
 
 // RGB is an 8-bit color channel triple (`icon.RGB`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -33,6 +34,13 @@ const SEVERITY_COLORS: [(&str, Rgb); 5] = [
     ("idle", Rgb::new(0x6B, 0x72, 0x80)),
 ];
 
+/// The agent-tile icon's own colors (not severity state): the tile's dark
+/// fill (the panel background), the tile's gray border — legible on light
+/// and dark taskbars — and the idle-gray prompt of the dimmed blink phase.
+const TILE: Rgb = Rgb::new(0x1C, 0x1E, 0x22);
+const BORDER: Rgb = Rgb::new(0x9C, 0xA3, 0xAF);
+const IDLE: Rgb = Rgb::new(0x6B, 0x72, 0x80);
+
 /// The color for a severity, defaulting to idle gray (`icon.Color`).
 pub fn color(severity: &str) -> Rgb {
     SEVERITY_COLORS
@@ -48,28 +56,28 @@ pub fn color(severity: &str) -> Rgb {
 type PixelFn = fn(Rgb, usize, usize, usize) -> (u8, u8, u8, u8);
 
 /// Tray icon bytes for a severity: a 32bpp ICO on Windows
-/// (LoadImage-compatible), a PNG elsewhere. Filled disc with a white halo
-/// (`icon.Bytes`).
+/// (LoadImage-compatible), a PNG elsewhere. The agent tile, prompt in the
+/// severity color (`icon.Bytes`).
 pub fn bytes(severity: &str, size: usize) -> Vec<u8> {
-    render(circle_pixel, color(severity), size)
+    render(agent_tile_bright, color(severity), size)
 }
 
-/// The severity color as a ring over a white halo on a transparent
-/// background: the "off" phase of the attention blink (`icon.BytesHollow`).
+/// The dim tile for the blink's "off" phase: same shape, prompt in idle
+/// gray (`icon.BytesHollow`).
 pub fn bytes_hollow(severity: &str, size: usize) -> Vec<u8> {
-    render(ring_pixel, color(severity), size)
+    render(agent_tile_dim, color(severity), size)
 }
 
 /// Straight (not premultiplied) RGBA rows for a filled severity disc —
 /// what [`rune::TrayIcon::rgba`] consumes (width × height × 4 bytes,
 /// row-major, top-down).
 pub fn rgba(severity: &str, size: usize) -> Vec<u8> {
-    raster(circle_pixel, color(severity), size)
+    raster(agent_tile_bright, color(severity), size)
 }
 
 /// RGBA rows of the ring ("off") variant for [`rune::TrayIcon::rgba`].
 pub fn rgba_hollow(severity: &str, size: usize) -> Vec<u8> {
-    raster(ring_pixel, color(severity), size)
+    raster(agent_tile_dim, color(severity), size)
 }
 
 /// Encodes a pixel function as an ICO (Windows) or PNG (elsewhere)
@@ -141,10 +149,10 @@ fn ico_from(pixel: PixelFn, c: Rgb, size: usize) -> Vec<u8> {
     buf
 }
 
-/// Renders the filled severity disc as PNG bytes — toast logo
-/// (`icon.RenderPNG`).
+/// Renders the agent tile as PNG bytes — toast logo, and the app
+/// icon the flyout hands to `rune::set_app_icon` (`icon.RenderPNG`).
 pub fn render_png(c: Rgb, size: usize) -> Vec<u8> {
-    png_from(circle_pixel, c, size)
+    png_from(agent_tile_bright, c, size)
 }
 
 /// Renders any pixel function into a PNG buffer (`icon.pngFrom`). Returns
@@ -173,56 +181,133 @@ fn png_from(pixel: PixelFn, c: Rgb, size: usize) -> Vec<u8> {
     out
 }
 
-/// Composes a colored disc over a slightly larger white halo, both
-/// antialiased, over transparency; visible on light and dark trays
-/// (`icon.circlePixel`).
-fn circle_pixel(c: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
-    let d = dist(size, x, y);
-    let disc_r = center(size) - 3.0;
-    let disc_a = coverage(d, disc_r);
-    let halo_a = coverage(d, disc_r + 1.5);
-    if halo_a <= 0.0 {
-        return (0, 0, 0, 0);
-    }
-    blend_over_white(c, disc_a / halo_a, halo_a)
-}
-
-/// Composes a severity-colored ring (3px band) over the same white halo;
-/// reads as an "off" phase next to the filled disc (`icon.ringPixel`).
-fn ring_pixel(c: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
-    let d = dist(size, x, y);
-    let r = center(size) - 3.0;
-    let ring_a = coverage(d, r) - coverage(d, r - 3.0);
-    let halo_a = coverage(d, r + 1.5) - coverage(d, r); // halo hugs the ring outside
-    if halo_a <= 0.0 && ring_a <= 0.0 {
-        return (0, 0, 0, 0);
-    }
-    let alpha = halo_a.max(ring_a);
-    blend_over_white(c, ring_a / alpha, alpha)
-}
-
-/// Composes color at mix over a white base with alpha (`icon.blendOverWhite`).
-fn blend_over_white(c: Rgb, mix: f64, alpha: f64) -> (u8, u8, u8, u8) {
-    let out = |ch: u8| -> u8 {
-        let v = 255.0 * (1.0 - mix) + f64::from(ch) * mix;
-        let v = v.clamp(0.0, 255.0);
-        (v + 0.5) as u8
+/// Composes `top` over `base` with fractional alpha; straight RGBA out
+/// with `alpha_out` as the pixel's own coverage.
+fn over(base: Rgb, top: Rgb, a: f64, alpha_out: f64) -> (u8, u8, u8, u8) {
+    let mix = |b: u8, t: u8| -> u8 {
+        (f64::from(b) * (1.0 - a) + f64::from(t) * a + 0.5) as u8
     };
-    (out(c.r), out(c.g), out(c.b), (alpha * 255.0 + 0.5) as u8)
+    (
+        mix(base.r, top.r),
+        mix(base.g, top.g),
+        mix(base.b, top.b),
+        (alpha_out * 255.0 + 0.5) as u8,
+    )
 }
 
-fn center(size: usize) -> f64 {
-    size as f64 / 2.0
+/// One pixel of the agent tile (the v0.6 icon, not a bare circle): a dark
+/// rounded tile with a gray border — legible on light and dark trays —
+/// and the terminal prompt `>_` stroked in `prompt` (the severity; the
+/// blink's dim phase passes idle gray). The `>_` is the terminal-agent
+/// mark; herdr's own tab labels use the same glyph.
+fn agent_tile(prompt: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
+    let half = size as f64 / 2.0;
+    let s = size as f64;
+    let px = x as f64 + 0.5 - half;
+    let py = y as f64 + 0.5 - half;
+
+    // rounded tile, inset from the icon's edge
+    let inset = (s * 0.05).max(0.75);
+    let hw = half - inset;
+    let radius = (s * 0.16).clamp(1.5, 24.0);
+    let qx = px.abs() - hw + radius;
+    let qy = py.abs() - hw + radius;
+    let d_box = qx.max(0.0).hypot(qy.max(0.0)) + qx.max(qy).min(0.0) - radius;
+
+    let stroke = (s * 0.045).max(1.0); // border thickness
+    let a_border = (0.5 - (d_box.abs() - stroke / 2.0)).clamp(0.0, 1.0);
+    if d_box > stroke / 2.0 + 0.5 {
+        return (0, 0, 0, 0); // outside the tile
+    }
+
+    // the `>_` prompt, laid out in fractions of the usable half-extent
+    let w = hw - stroke;
+    let seg = |ax: f64, ay: f64, bx: f64, by: f64| -> f64 {
+        let (ax, ay, bx, by) = (ax * w, ay * w, bx * w, by * w);
+        let (vx, vy) = (bx - ax, by - ay);
+        let t = (((px - ax) * vx + (py - ay) * vy) / (vx * vx + vy * vy)).clamp(0.0, 1.0);
+        ((px - ax - t * vx)).hypot(py - ay - t * vy)
+    };
+    let pw = (s * 0.075).max(1.2); // prompt stroke width
+    let d_glyph = seg(-0.42, -0.38, -0.10, 0.0) // `>` upper stroke
+        .min(seg(-0.10, 0.0, -0.42, 0.38)) // `>` lower stroke
+        .min(seg(-0.02, 0.38, 0.42, 0.38)); // `_`
+    let a_glyph = (0.5 - (d_glyph - pw / 2.0)).clamp(0.0, 1.0);
+
+    if a_border > 0.0 {
+        return over(TILE, BORDER, a_border, 1.0);
+    }
+    over(TILE, prompt, a_glyph, 1.0)
 }
 
-fn dist(size: usize, x: usize, y: usize) -> f64 {
-    let dx = x as f64 + 0.5 - center(size);
-    let dy = y as f64 + 0.5 - center(size);
-    dx.hypot(dy)
+/// The bright tile: prompt in the severity color.
+fn agent_tile_bright(c: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
+    agent_tile(c, size, x, y)
 }
 
-/// Approximates the fraction of the pixel covered by a disc of radius r at
-/// distance d (1px linear ramp) (`icon.coverage`).
-fn coverage(d: f64, r: f64) -> f64 {
-    (r - d + 0.5).clamp(0.0, 1.0)
+/// The dim tile (blink "off" phase): prompt in idle gray, same shape.
+fn agent_tile_dim(_c: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
+    agent_tile(IDLE, size, x, y)
+}
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn corners_are_transparent() {
+        let sev = color("working");
+        for size in [16, 32, 256] {
+            for (x, y) in [(0, 0), (size - 1, 0), (0, size - 1), (size - 1, size - 1)] {
+                let (_, _, _, a) = agent_tile_bright(sev, size, x, y);
+                assert_eq!(a, 0, "corner ({x},{y}) at {size}px must be transparent");
+            }
+        }
+    }
+
+    #[test]
+    fn prompt_paints_in_the_severity_color() {
+        let sev = color("working"); // #FFD60A
+        let size = 32;
+        let mut painted = 0;
+        for y in 0..size {
+            for x in 0..size {
+                let (r, g, b, a) = agent_tile_bright(sev, size, x, y);
+                if a == 255 && (r, g, b) == (sev.r, sev.g, sev.b) {
+                    painted += 1;
+                }
+            }
+        }
+        assert!(
+            painted > 20,
+            "the >_ prompt must paint in the severity color ({painted} px)"
+        );
+    }
+
+    #[test]
+    fn dim_phase_prompt_is_idle_gray() {
+        let size = 32;
+        let mut gray = 0;
+        for y in 0..size {
+            for x in 0..size {
+                let (r, g, b, a) = agent_tile_dim(color("working"), size, x, y);
+                if a == 255 && (r, g, b) == (IDLE.r, IDLE.g, IDLE.b) {
+                    gray += 1;
+                }
+            }
+        }
+        assert!(gray > 20, "dim prompt paints idle gray ({gray} px)");
+    }
+
+    /// Eyeball helper: writes the tile at several sizes to /tmp
+    /// (`cargo test -- --ignored icon_smoke`).
+    #[test]
+    #[ignore = "writes PNGs for eyeballing: cargo test -- --ignored icon_smoke"]
+    fn smoke_writes_icon_pngs() {
+        for size in [16, 24, 32, 128, 256] {
+            let png = render_png(color("working"), size);
+            std::fs::write(format!("/tmp/agent-icon-{size}.png"), png).unwrap();
+        }
+        let png = render_png(IDLE, 64);
+        std::fs::write("/tmp/agent-icon-dim-64.png", png).unwrap();
+    }
 }
