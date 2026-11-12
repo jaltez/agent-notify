@@ -35,13 +35,25 @@ pub struct Agent {
     pub status: String,
     pub title: String,
     pub project: String,
+    /// The agent's tab's display label ("#", "#test"; `tabs.label`, joined
+    /// from the agent's `tab_id` at parse time).
+    pub tab: String,
     pub focused: bool,
+}
+
+/// A tab's display label, keyed by tab id (`herdr.Tab`; the snapshot's
+/// `tabs` array is what names tabs — "#" and "#test" are real labels).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct TabLabel {
+    pub tab_id: String,
+    pub label: String,
 }
 
 /// A point-in-time view of one session (`herdr.Snapshot`).
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Snapshot {
     pub agents: Vec<Agent>,
+    pub tabs: Vec<TabLabel>,
 }
 
 /// One herdr session on one backend (`herdr.Session`). `ref_` is the
@@ -87,12 +99,44 @@ pub fn parse_snapshot(data: &[u8]) -> anyhow::Result<Snapshot> {
         .map_err(|e| anyhow::anyhow!("parse snapshot JSON: {e}"))?;
     let doc = unwrap_value(doc);
     let mut snap = Snapshot::default();
+    // Tab labels first: agents join their tab_id against them (the pane
+    // object itself carries no tab name).
+    let labels: std::collections::HashMap<String, String> = doc
+        .get("tabs")
+        .and_then(Value::as_array)
+        .map(|raw| {
+            raw.iter()
+                .filter_map(|t| match t {
+                    Value::Object(m) => {
+                        let id = str_field(m, &["tab_id"]);
+                        if id.is_empty() {
+                            None
+                        } else {
+                            Some((id, str_field(m, &["label"])))
+                        }
+                    }
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(raw) = doc.get("tabs").and_then(Value::as_array) {
+        for t in raw {
+            if let Value::Object(m) = t {
+                snap.tabs.push(TabLabel {
+                    tab_id: str_field(m, &["tab_id"]),
+                    label: str_field(m, &["label"]),
+                });
+            }
+        }
+    }
     if let Some(raw) = doc.get("agents").and_then(Value::as_array) {
         for ra in raw {
             let m = match ra {
                 Value::Object(m) => m,
                 _ => continue,
             };
+            let tab_id = str_field(m, &["tab_id"]);
             snap.agents.push(Agent {
                 name: str_field(m, &["agent", "display_agent"]),
                 status: normalize_status(&str_field(m, &["agent_status"])).to_string(),
@@ -102,6 +146,7 @@ pub fn parse_snapshot(data: &[u8]) -> anyhow::Result<Snapshot> {
                     str_field(m, &["cwd"]),
                 ]),
                 pane_id: str_field(m, &["pane_id"]),
+                tab: labels.get(&tab_id).cloned().unwrap_or_default(),
                 focused: matches!(m.get("focused"), Some(Value::Bool(true))),
             });
         }
@@ -583,6 +628,27 @@ mod tests {
     fn test_parse_snapshot_bare() {
         // no envelope wrapping
         parse_snapshot(br#"{"agents":[]}"#).expect("bare snapshot");
+    }
+
+    #[test]
+    fn test_parse_snapshot_joins_tab_labels() {
+        // agents carry only tab_id; the label lives in the tabs array and
+        // parse_snapshot joins them ("#", "#test" are real tab names)
+        let doc = br##"{"id":"x","result":{"snapshot":{
+            "agents":[
+                {"agent":"omp","agent_status":"done","pane_id":"w2S:p1","tab_id":"w2S:t1","workspace_id":"w2S"},
+                {"agent":"pi","agent_status":"working","pane_id":"w2S:p3","tab_id":"w2S:t2","workspace_id":"w2S"},
+                {"agent":"zed","agent_status":"idle","pane_id":"w9:p1","tab_id":"w9:t9","workspace_id":"w9"}
+            ],
+            "tabs":[
+                {"tab_id":"w2S:t1","label":"#","number":1,"workspace_id":"w2S"},
+                {"tab_id":"w2S:t2","label":"#test","number":2,"workspace_id":"w2S"}
+            ]}}}"##;
+        let snap = parse_snapshot(doc).expect("snapshot parses");
+        assert_eq!(snap.tabs.len(), 2);
+        assert_eq!(snap.agents[0].tab, "#");
+        assert_eq!(snap.agents[1].tab, "#test");
+        assert_eq!(snap.agents[2].tab, "", "unknown tab id stays empty");
     }
 
     #[test]

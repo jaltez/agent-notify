@@ -18,13 +18,13 @@ exists on the branch today, not what is planned.
   enabled by the default `dbus` feature (not disabled here), which is what
   makes WSLg testing possible.
 
-## Gates (re-run for this document, 2026-11-11)
+## Gates (re-run for this document, 2026-11-12)
 
 | Check | Command | Result |
 | --- | --- | --- |
 | cargo check | `CARGO_TARGET_DIR=/tmp/an-notes-check cargo check` | green — `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 29.25s`, 0 errors |
-| cargo test | `CARGO_TARGET_DIR=/tmp/an-notes-check cargo test` | green — `88 passed; 0 failed; 1 ignored` in 4.46s (the ignored test is the headless flyout PNG smoke, see §6) |
-| windows-gnu probe | `cargo check --target x86_64-pc-windows-gnu` | exit 0 — `Finished \`dev\` profile [unoptimized + debuginfo] target(s) in 0.34s` (fully cached; the full cross-compile first ran green on the first attempt during the port rounds) |
+| cargo test | `cargo test` | green — `95 passed; 0 failed; 1 ignored` in 2.28s (the ignored test is the headless flyout PNG smoke, see §6) |
+| windows-gnu probe | `cargo check --target x86_64-pc-windows-gnu` | exit 0 — fresh compile (not cached), `Finished \`dev\` profile ... in 33.76s` |
 
 Round-1 gates recorded during the port were also all green (check, test,
 windows-gnu check).
@@ -96,12 +96,51 @@ flytest was a no-op on non-Windows, it works on every platform.
 - Scroll uses rune's viewport (`.scroll(ScrollSpec)`, rune draws the thumb),
   replacing Go's hand-rolled wheelStep 40px math; the "auto-close only armed
   if not scrollable" semantics are ported exactly.
-- Click-outside/Escape/auto-close use `Tx::close_window` (destroy + recreate
-  on next show), the launcher pattern, instead of Go's retained `SW_HIDE`
-  window; collapse/scroll state lives in the app state and survives.
-- Go's `activateGrace` reduced to its real effect: its only branch reset
-  `activated`, so the port closes the panel if and only if it had focus
-  (commented in `flyout_focus`).
+- Sessions lay out in a columns × rows grid, porting `flyout.layout`'s
+  scoring onto rune: candidate column counts (170..300 pt per column, 24 pt
+  gap), and the **tallest count that fits the fixed grid area** wins — Go's
+  aspect-ratio scoring kept small fleets in one honest narrow column, the
+  thing the redesign left behind. Nothing fitting ⇒ widest grid, the
+  viewport scrolls. rune's `.equal_columns(n)` lays the cells (row-major,
+  row height = tallest session), so the hand-rolled 2D hit-testing of the
+  Go is gone — clicks are per-row `on_press` anywhere in the grid. Each
+  section carries `min_w(0)`: a grid column floors at its widest child's
+  min-content, and without the floor a long unbreakable title pushed the
+  column past the panel edge.
+- **Fixed window + tabs (2026-11-12 redesign)**: the panel is a fixed
+  window — ~62 % of the work area wide (1080 pt cap) by ~72 % tall
+  (780 pt cap), opened **centered** in the work area, no longer hooked to
+  the tray-icon corner; the content-fit shrink is gone — its height
+  estimates drifted from rune's real layout, which is where the surprise
+  scrollbar came from. A kit `SegmentedControl` tab bar
+  switches rooms: "All" (the grid) plus one full-width room per session;
+  labels repeat the host only when a session name is ambiguous across
+  hosts, and the pick resolves through the current model so a stale index
+  cannot pin a vanished session. Auto-close always arms now (the hover
+  re-arm keeps long reads); session sort gained a host tiebreak so tabs
+  order stably across refreshes.
+- **A regular window (2026-11-12)**: titled, resizable, min/max/close,
+  not topmost, taskbar icon (`rune::set_app_icon` with the working-blue
+  disc; on Windows it sets title bar, taskbar and Alt+Tab icons). Opening
+  geometry (metrics size, centered) applies exactly once — afterwards the
+  user owns the window. The chrome is **integrated**, not native: the
+  window is borderless, the header row carries `window_drag` plus drawn
+  minimize (`Tx::minimize`), maximize (`Tx::toggle_maximized`) and close
+  (hide; the app keeps running and the tray reopens the window with its
+  geometry) buttons — `El::no_window_drag` keeps presses off the drag
+  region. The Go flyover dismissal semantics are gone: no auto-close
+  timer, no Escape/click-outside dismissal, no focus-loss hide.
+- **Bulk row controls + title mode (2026-11-12)**: right of the tab bar,
+  `collapse all` / `expand all` set an explicit open override on every
+  session and settled group in the fleet (`FlyState::set_all`), and
+  `titles: task` / `titles: tab` switches agent labels between herdr's
+  task title and the colored tab name "<space> - #<n>" (project muted,
+  pane accent — `title_parts` parses the pane id). The mode rides the
+  content fingerprint, so a toggle re-renders. Close and agent clicks
+  **hide** the window (`AppHandle::hide` retains it, so the user's resize
+  survives); the tray toggles show/hide.
+- Go's `activateGrace` (600 ms) is gone with the flyover semantics — a
+  regular window has no focus-loss dismissal to gate.
 - `gdiSafe` is kept byte-for-byte in the model (even though rune renders emoji
   via Parley) for model fidelity and its tests.
 - Palette: Go COLORREFs are converted with `srgb_decode` to linear light
@@ -323,7 +362,7 @@ fixed yet.
 
 | # | Where | What | Severity | Status |
 | --- | --- | --- | --- | --- |
-| 1 | `src/flyout.rs:1339` (focus_agent), `src/tray.rs:243-245`, `src/cli.rs:1145` — nobody calls `FlyControl::set_focus_agent` in all of src/; `src/herdr.rs:513` (wsl_herdr_args) and Engine::session_socket are dead code | In Go, clickRow→focusAgent (flyout_windows.go:396-422) runs `herdr agent focus <pane>` (wsl.exe -e env PATH/HERDR_SOCKET_PATH, or herdr.exe --session, 5s timeout) then raiseHerdrWindow. In Rust the focus callback is never installed, so clicking an agent in the flyout only closes the panel and focuses nothing — a visible behavior loss. | high | verified (open) |
+| 1 | `src/flyout.rs:1339` (focus_agent), `src/tray.rs:243-245`, `src/cli.rs:1145` — nobody calls `FlyControl::set_focus_agent` in all of src/; `src/herdr.rs:513` (wsl_herdr_args) and Engine::session_socket are dead code | In Go, clickRow→focusAgent (flyout_windows.go:396-422) runs `herdr agent focus <pane>` (wsl.exe -e env PATH/HERDR_SOCKET_PATH, or herdr.exe --session, 5s timeout) then raiseHerdrWindow. In Rust the focus callback is never installed, so clicking an agent in the flyout only closes the panel and focuses nothing — a visible behavior loss. | high | **fixed (2026-11-12)** — `wire_focus_agent` is installed on every host (was `#[cfg(windows)]`); the raise is session-aware (see §5 step 7) |
 | 2 | `src/engine.rs:1086-1088` (warnf/debugf no-ops) vs engine.go:318-328 with WithLogger wired in internal/cli/cli.go:185 | The Go engine logs "session discovery failed: …", "snapshot X failed: …" and "event queue full; dropping …"; the Rust engine never writes those warnings (logger removed from the API), losing discovery/fetch diagnostics. | low | unconfirmed |
 | 3 | `src/proc.rs:174-203` (look_path) vs exec.LookPath/findExecutable (local.go:53, windows.go:35) | Go requires the exec bit when resolving binaries from PATH (Unix); Rust only checks is_file, so a present-but-not-+x binary enables the backend and fails every fetch (PermissionDenied → session drops after 3 polls) where Go would treat it as not-found and disable the backend. | low | unconfirmed |
 | 4 | `src/proc.rs:97` vs proc.Run/exec.CommandContext (proc.go:26-38) | On timeout Go returns "signal: killed" (verified empirically with go1.26.3); Rust returns "context deadline exceeded" — different visible error text in `agent-notify probe` and sink-annotated errors. | low | unconfirmed |
@@ -363,15 +402,28 @@ Manual checklist:
 4. **Icon churn** — while the blink is armed, expect the tray to be torn down
    and recreated ~2×/s on Linux (the WORKAROUND above); brief D-Bus flicker is
    normal, not a bug.
-5. **Flyout** — opens on tray primary click; closes on focus loss, Esc, and
-   auto-close timer; content taller than the panel scrolls (rune viewport
-   thumb); collapsible session groups toggle compact rows.
+5. **Panel** — opens on tray primary click, centered; the title bar has
+   min/max/close (close hides, the app keeps running; the tray reopens
+   it); the user can resize/maximize freely (opening geometry applies
+   once); content taller than the window scrolls (rune viewport thumb);
+   collapsible session groups toggle compact rows.
 6. **Test notification toast** — `agent-notify test` fires through every
    configured sink (notify-send on Linux/WSLg; the powershell.exe interop path
    if configured; the rune-notify native path is Windows-only).
-7. **Click on an agent** — currently only closes the panel and does NOT focus
-   the client: the focus callback is never installed (parity finding #1,
-   high). Known gap, not a regression to chase in testing.
+7. **Click on an agent** — runs `herdr agent focus <pane>` (herdr.exe for
+   windows-hosted sessions, wsl.exe + HERDR_SOCKET_PATH otherwise), then
+   raises the client window. The raise is **session-aware**: with several
+   terminals running herdr clients (a WSL-projects window, a pods
+   window…), it prefers a visible window whose title names the clicked
+   session (`pods`), falling back to the first "herdr"-titled one — the
+   Go always took the first herdr window, which was often the wrong
+   terminal. Windows runs the scan natively (EnumWindows); every other
+   host (WSLg tray) runs the same scan over PowerShell interop
+   (`-EncodedCommand`, C# EnumWindows payload; the script requires CRLF
+   line endings — Windows PowerShell 5.1 rejects LF-only here-strings).
+   Caveat: a client whose window title carries neither "herdr" nor the
+   session name stays unfindable — same best-effort caveat as the Go
+   ("a client hidden behind other tabs is not findable here").
 
 ## 6. Pending
 
@@ -386,9 +438,10 @@ Manual checklist:
   source; this is a toolkit limitation, not a port decision). The headless
   commands (run/monitor/probe/test) are unaffected; the tray+flyout experience
   cannot ship there until rune supports it.
-- **Parity findings open** — #1 (flyout agent focus never wired — high,
-  verified), #2 (engine logger no-ops), #3 (look_path exec bit), #4 (timeout
-  error text). See §4.
+- **Parity findings open** — #2 (engine logger no-ops), #3 (look_path exec
+  bit), #4 (timeout error text). #1 (flyout agent focus never wired, high)
+  is fixed: the callback is installed on every host and the raise prefers
+  the clicked session's window (§5 step 7).
 - **rune icon-update API** — `swap_icon` tray recreation is a workaround;
   revisit when rune lands an official set_icon/update_icon.
 - **Render template engine decision** — which engine replaces Go
@@ -405,7 +458,7 @@ Manual checklist:
   never verified against a real Windows LoadImage; the PNG and the RGBA
   rasters for `rune::TrayIcon` are verified.
 - **`#![allow(dead_code)]`** in main.rs — still broad; narrow as modules stay
-  wired (note: the dead-code situation has shifted since the scaffold —
-  finding #1's focus path is itself dead code today).
+  wired (finding #1's focus path is wired again since 2026-11-12; the
+  remaining dead code is shrinking).
 - **Config schema walker** — `CONFIG_SCHEMA`/`SINK_SCHEMA` must be kept in
   sync with the structs by hand when the config grows.

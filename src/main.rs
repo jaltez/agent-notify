@@ -11,6 +11,11 @@
 //!   threads; in `run` (headless daemon) mode no rune UI is created at all.
 
 #![allow(dead_code)]
+// Release builds (`--features windowsgui`): no console flash when the tray
+// exe launches from Explorer; CLI subcommands reattach via
+// `attach_parent_console` (cli.rs). The installer's console twin is the
+// same source built without this feature.
+#![cfg_attr(all(windows, feature = "windowsgui"), windows_subsystem = "windows")]
 
 mod buildinfo;
 mod cli;

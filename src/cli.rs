@@ -573,10 +573,9 @@ fn cmd_tray(config_path: &str, log: &Logger, stderr: &mut dyn Write) -> i32 {
     // Agent clicks focus the agent in an open client (flyout.focusAgent).
     // Go's flyout builds that herdr call itself (newFlyout(t.eng, t.log));
     // the Rust panel keeps the invocation with the CLI, so it is wired
-    // here. Windows-only: the Go flyout exists only there (flyout_other.go
-    // is a stub) and the argv/raise steps drive wsl.exe, herdr.exe and
-    // Win32; on other platforms the tray menu stays the detail surface.
-    #[cfg(windows)]
+    // here. The argv/raise steps drive wsl.exe, herdr.exe and Win32 (the
+    // window raise runs natively on Windows, over PowerShell interop
+    // elsewhere — the wt clients live on the Windows side).
     if let Some(ctl) = tray.flyout_control() {
         wire_focus_agent(&eng, &ctl, log);
     }
@@ -586,7 +585,6 @@ fn cmd_tray(config_path: &str, log: &Logger, stderr: &mut dyn Write) -> i32 {
 }
 
 /// The focus invocation timeout (`flyout.focusAgent`'s 5 s context).
-#[cfg(windows)]
 const FOCUS_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// Installs the flyout agent-focus callback (`flyout.focusAgent`,
@@ -594,10 +592,10 @@ const FOCUS_TIMEOUT: Duration = Duration::from_secs(5);
 /// clicked row's session — `herdr.exe` for windows-hosted sessions, else
 /// `wsl.exe` targeting the session's discovered socket, mirroring how the
 /// wsl backend itself invokes herdr (no login shell, explicit PATH,
-/// HERDR_SOCKET_PATH, `herdr.WSLHerdrArgs`) — then raise an already-open
-/// herdr client window (`flyout.raiseHerdrWindow`). Best effort: a failed
-/// run logs at debug and the raise still happens.
-#[cfg(windows)]
+/// HERDR_SOCKET_PATH, `herdr.WSLHerdrArgs`) — then raise the already-open
+/// herdr client window showing that session
+/// (`flyout.raiseHerdrWindow`). Best effort: a failed run logs at debug
+/// and the raise still happens.
 fn wire_focus_agent(eng: &Arc<Engine>, ctl: &crate::flyout::FlyControl, log: &Logger) {
     use crate::herdr;
     use crate::proc;
@@ -631,30 +629,43 @@ fn wire_focus_agent(eng: &Arc<Engine>, ctl: &crate::flyout::FlyControl, log: &Lo
         if let Err(err) = proc::run(&argv, &[], "", FOCUS_TIMEOUT) {
             log.debug(&format!("focusAgent {sess}/{pane}: {err}"));
         }
-        raise_herdr_window(&log);
+        raise_herdr_window(&log, sess);
     });
 }
 
 /// Brings an already-open herdr client window to the front
-/// (`flyout.raiseHerdrWindow`, flyout_windows.go:427): the first visible
-/// top-level window whose title mentions herdr is restored and
-/// foregrounded. Best effort; a client hidden behind other tabs is not
-/// findable here.
-#[cfg(windows)]
-fn raise_herdr_window(log: &Logger) {
-    use std::sync::atomic::{AtomicBool, Ordering};
-
+/// (`flyout.raiseHerdrWindow`, flyout_windows.go:427), upgraded for
+/// multi-client setups: the agent lives in one session (say `pods`) while
+/// several terminals run herdr clients (a WSL-projects window, a pods
+/// window…), so the first "herdr"-titled window is often the wrong one.
+/// The raise now prefers a visible window whose title mentions the
+/// clicked session, falling back to the first herdr-titled one. A client
+/// whose window title carries neither string stays unfindable — same
+/// best-effort caveat as the Go.
+#[cfg(target_os = "windows")]
+fn raise_herdr_window(log: &Logger, sess: &str) {
     use windows::Win32::Foundation::{HWND, LPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         EnumWindows, GetWindowTextW, IsWindowVisible, SetForegroundWindow, ShowWindow, SW_RESTORE,
     };
     use windows::core::BOOL;
 
-    // Enumeration stops at the first match (Go's `found` + `return 0`),
-    // which EnumWindows reports as an error; ignored like the Go does.
+    let prefer = sess.to_lowercase();
+
+    // Enumeration stops at the session match (Go's `found` + `return 0`,
+    // which EnumWindows reports as an error; ignored like the Go does).
+    // A bare-herdr hit is remembered, not taken: a later window naming the
+    // session is the better target.
+    struct EnumState {
+        prefer: String,
+        any: Option<HWND>,
+        best: Option<HWND>,
+    }
     unsafe extern "system" fn raise_enum_cb(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        let found = unsafe { &*(lparam.0 as *const AtomicBool) };
-        if found.load(Ordering::Relaxed) {
+        // SAFETY: EnumWindows is synchronous; the state pointer outlives
+        // the call (it lives in the caller's frame, as in the Go).
+        let st = unsafe { &mut *(lparam.0 as *mut EnumState) };
+        if st.best.is_some() {
             return BOOL(0);
         }
         unsafe {
@@ -667,24 +678,117 @@ fn raise_herdr_window(log: &Logger) {
             if !title.contains("herdr") {
                 return BOOL(1);
             }
+            if !st.prefer.is_empty() && title.contains(&st.prefer) {
+                st.best = Some(hwnd);
+                return BOOL(0);
+            }
+            if st.any.is_none() {
+                st.any = Some(hwnd);
+            }
+        }
+        BOOL(1)
+    }
+
+    let mut state = EnumState {
+        prefer,
+        any: None,
+        best: None,
+    };
+    unsafe {
+        let _ = EnumWindows(
+            Some(raise_enum_cb),
+            LPARAM(&mut state as *mut EnumState as isize),
+        );
+    }
+    let target = state.best.or(state.any);
+    match target {
+        Some(hwnd) => unsafe {
             // SW_RESTORE (9) then foreground; both return values are
             // ignored, as in the Go.
             let _ = ShowWindow(hwnd, SW_RESTORE);
             let _ = SetForegroundWindow(hwnd);
-        }
-        found.store(true, Ordering::Relaxed);
-        BOOL(0)
+        },
+        None => log.debug("raiseHerdrWindow: no window titled herdr"),
     }
+}
 
-    let found = AtomicBool::new(false);
-    unsafe {
-        let _ = EnumWindows(
-            Some(raise_enum_cb),
-            LPARAM(&found as *const AtomicBool as isize),
-        );
+/// The window raise on every other host (the Rust tray runs under WSLg,
+/// but the herdr clients are Windows Terminal windows on the Windows
+/// side): the same visible-title scan with session preference, done by a
+/// short PowerShell script over WSL interop (`-EncodedCommand` keeps the
+/// payload free of quoting rules). Best effort: any failure logs at debug.
+#[cfg(not(target_os = "windows"))]
+fn raise_herdr_window(log: &Logger, sess: &str) {
+    use crate::proc;
+    use base64::{engine::general_purpose::STANDARD, Engine as _};
+
+    // The window scan, as a C# payload for Add-Type (C# 5: no string
+    // interpolation, classic delegate). The visible-title enumeration
+    // mirrors the Windows-native path: prefer a herdr window whose title
+    // names the session, else the first herdr window; SW_RESTORE (9) +
+    // SetForegroundWindow.
+    const RAISE_CS: &str = r#"
+using System;
+using System.Text;
+using System.Runtime.InteropServices;
+public class HerdrRaise {
+    public delegate bool EnumProc(IntPtr h, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool EnumWindows(EnumProc cb, IntPtr l);
+    [DllImport("user32.dll")] public static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll", CharSet=CharSet.Unicode)] public static extern int GetWindowText(IntPtr h, StringBuilder sb, int n);
+    [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr h);
+    [DllImport("user32.dll")] public static extern bool ShowWindow(IntPtr h, int cmd);
+    public static string Find(string needle, string prefer) {
+        IntPtr best = IntPtr.Zero, any = IntPtr.Zero;
+        EnumWindows(delegate(IntPtr h, IntPtr l) {
+            if (!IsWindowVisible(h)) return true;
+            StringBuilder sb = new StringBuilder(256);
+            GetWindowText(h, sb, 256);
+            string t = sb.ToString().ToLower();
+            if (t.IndexOf(needle, StringComparison.Ordinal) < 0) return true;
+            if (any == IntPtr.Zero) any = h;
+            if (prefer != "" && t.IndexOf(prefer, StringComparison.Ordinal) >= 0) { best = h; return false; }
+            return true;
+        }, IntPtr.Zero);
+        IntPtr target = best != IntPtr.Zero ? best : any;
+        if (target == IntPtr.Zero) return "";
+        ShowWindow(target, 9);
+        SetForegroundWindow(target);
+        return "raised";
     }
-    if !found.load(Ordering::Relaxed) {
-        log.debug("raiseHerdrWindow: no window titled herdr");
+}
+"#;
+
+    // Session names come from herdr's socket dirs; keep the match string
+    // alphanumeric so it cannot break the embedded C# string literal.
+    let prefer: String = sess
+        .chars()
+        .filter(|c| c.is_ascii_alphanumeric() || *c == '-' || *c == '_')
+        .collect();
+    // -EncodedCommand takes base64(UTF-16LE); the here-string terminator
+    // must sit at column 0, which RAISE_CS's trailing newline guarantees.
+    let script = format!(
+        "$ErrorActionPreference = 'SilentlyContinue'\nAdd-Type -TypeDefinition @'{RAISE_CS}'@\nif (-not [HerdrRaise]::Find('herdr', '{prefer}')) {{ exit 2 }}\n"
+    )
+    // Windows PowerShell 5.1 only honors the here-string terminator with
+    // CRLF line endings; LF-only payloads fail to parse (pwsh takes both).
+    .replace('\n', "\r\n");
+    let utf16: Vec<u8> = script.encode_utf16().flat_map(|u| u.to_le_bytes()).collect();
+    let encoded = STANDARD.encode(utf16);
+    let argv: Vec<String> = [
+        "powershell.exe",
+        "-NoProfile",
+        "-NonInteractive",
+        "-ExecutionPolicy",
+        "Bypass",
+        "-EncodedCommand",
+        encoded.as_str(),
+    ]
+    .into_iter()
+    .map(String::from)
+    .collect();
+    if let Err(err) = proc::run(&argv, &[], "", FOCUS_TIMEOUT) {
+        log.debug(&format!("raiseHerdrWindow: {err}"));
     }
 }
 

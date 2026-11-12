@@ -5,6 +5,12 @@ edition = "2024"
 description = "Agent state notifications: Rust port scaffolding (go agent-notify -> rune)"
 license = "MIT"
 
+[features]
+# Release builds: the shipped `agent-notify.exe` is a windowsgui binary
+# (no console flash when launched from Explorer); the console twin for the
+# installer is the same source built without this feature.
+windowsgui = []
+
 [dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -14,6 +20,8 @@ thiserror = "2"
 png = "0.18"
 dirs = "6"
 ureq = { version = "2", default-features = false, features = ["tls", "json"] }
+# -EncodedCommand payload for the flyout focus raise (UTF-16LE base64).
+base64 = "0.22"
 sha2 = "0.10"
 hex = "0.4"
 flate2 = "1"

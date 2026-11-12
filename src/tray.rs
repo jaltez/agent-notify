@@ -557,12 +557,34 @@ impl Tray {
                 if phase {
                     // attention ended: settle back to the steady icon
                     phase = false;
-                    self.swap_icon(&sev, false);
+                    if cfg!(target_os = "windows") {
+                        self.apply_tooltip(); // undo the pulse's prefix
+                    } else {
+                        self.swap_icon(&sev, false);
+                    }
                 }
                 continue;
             }
             phase = !phase;
-            self.swap_icon(&sev, !phase);
+            if cfg!(target_os = "windows") {
+                // WORKAROUND(rune): recreating the tray at 2/s (drop = NIM
+                // delete, new = NIM add) swallowed clicks and right-clicks
+                // on Windows — the icon was briefly gone twice a second.
+                // The pulse lives in the tooltip instead: set_tooltip is
+                // in place, the icon keeps its severity color. Linux keeps
+                // the icon blink (SNI churn is cheap there).
+                let tip = {
+                    let g = self.inner.lock().unwrap();
+                    let dot = if phase { "●" } else { "○" };
+                    format!("{dot} {}", g.tooltip)
+                };
+                let g = self.inner.lock().unwrap();
+                if let Some(t) = &g.rune_tray {
+                    t.set_tooltip(tip);
+                }
+            } else {
+                self.swap_icon(&sev, !phase);
+            }
         }
     }
 

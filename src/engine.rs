@@ -51,6 +51,9 @@ pub struct AgentView {
     pub title: String,
     pub project: String,
     pub pane_id: String,
+    /// The agent's tab's display label ("#", "#test"; herdr's `tabs`
+    /// array, joined on `tab_id`).
+    pub tab: String,
     pub focused: bool,
 }
 
@@ -1126,6 +1129,7 @@ impl Engine {
                     title: a.title.clone(),
                     project: a.project.clone(),
                     pane_id: a.pane_id.clone(),
+                    tab: a.tab.clone(),
                     focused: a.focused,
                 });
             }
@@ -1175,12 +1179,16 @@ mod tests {
             status: status.to_string(),
             title: title.to_string(),
             project: "api-server".to_string(),
+            tab: String::new(),
             focused: false,
         }
     }
 
     fn snap(agents: Vec<herdr::Agent>) -> herdr::Snapshot {
-        herdr::Snapshot { agents }
+        herdr::Snapshot {
+            agents,
+            tabs: Vec::new(),
+        }
     }
 
     /// tracker_test.go's kinds(): the kind of each event.
@@ -1601,7 +1609,13 @@ mod tests {
                     home: String::new(),
                 });
             }
-            st.snaps.insert(name.to_string(), herdr::Snapshot { agents });
+            st.snaps.insert(
+                name.to_string(),
+                herdr::Snapshot {
+                    agents,
+                    tabs: Vec::new(),
+                },
+            );
         }
     }
 
