@@ -764,7 +764,7 @@ pub struct Flyout {
 }
 
 /// The rune [`WindowOptions`] for the panel: an integrated-chrome window —
-/// borderless (the header draws its own minimize/maximize/close and drags
+/// borderless (the header draws its own maximize/close and drags
 /// the window), opaque content under rounded corners, resizable, not
 /// topmost — starting hidden until the tray shows it.
 pub fn window_options() -> WindowOptions {
@@ -1181,24 +1181,15 @@ fn titles_btn(mode: TitleMode, k: &Kit) -> El {
 fn header_el(m: &PanelModel, inner_w: f32, maximized: bool, k: &Kit) -> El {
     let mut c = col().w_full().gap(8.0);
 
-    // Integrated chrome: the header drags the window; the three buttons
-    // pinned at the far right are its minimize / maximize / close
+    // Integrated chrome: the header drags the window; the two buttons
+    // pinned at the far right are its maximize / close
     // (`El::no_window_drag` keeps presses off the drag region). Close
     // hides — the app keeps running and the tray reopens the window with
     // its geometry. The maximize glyph tracks our own toggles (rune has
     // no getter; an external Win+Up may desync it).
     let controls = {
-        let min_btn = {
-            let t = row()
-                .key("win-min")
-                .w(30.0)
-                .h(24.0)
-                .center()
-                .radius(6.0)
-                .child(icon(k.glyph.dash, 12.0).color(k.c.icon_muted));
-            k.interactive(t)
-                .on_press_tx(|_s: &mut FlyState, tx: &mut Tx| tx.minimize())
-        };
+        // no minimize button: this is a status surface, not an app to
+        // park — maximize and close cover it
         let max_btn = {
             // maximize: one square; restore: square-in-square
             let glyph = if maximized {
@@ -1230,7 +1221,7 @@ fn header_el(m: &PanelModel, inner_w: f32, maximized: bool, k: &Kit) -> El {
                 .child(icon(k.glyph.close, 12.0).color(k.c.icon_muted));
             k.interactive(t).on_press_tx(|s: &mut FlyState, _tx: &mut Tx| s.me.hide())
         };
-        row().gap(2.0).no_window_drag().child(min_btn).child(max_btn).child(close_btn)
+        row().gap(2.0).no_window_drag().child(max_btn).child(close_btn)
     };
 
     let mut title = row()
