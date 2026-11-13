@@ -1334,6 +1334,10 @@ fn session_section(sec: &SessionSection, idx: usize, mode: TitleMode, k: &Kit) -
     if !sec.open {
         return c;
     }
+    // The attention rows run flat on the card; every settled group drops
+    // into a recessed sub-tile with a severity stripe on its left edge —
+    // finished (green) and resting (gray) read as zones apart from what is
+    // still running.
     for (j, a) in sec.active.iter().enumerate() {
         c = c.child(agent_row(a, format!("agent:{idx}:{j}"), mode, k));
     }
@@ -1341,12 +1345,28 @@ fn session_section(sec: &SessionSection, idx: usize, mode: TitleMode, k: &Kit) -
         .into_iter()
         .flatten()
     {
-        c = c.child(group_trigger(g, k));
+        let mut body = col().w_full().gap(2.0).py(4.0);
+        body = body.child(group_trigger(g, k));
         if g.open {
             for (j, a) in g.agents.iter().enumerate() {
-                c = c.child(compact_row(a, format!("compact:{idx}:{j}"), mode, k));
+                body = body.child(compact_row(a, format!("compact:{idx}:{j}"), mode, k));
             }
         }
+        let tile = row()
+            .key(format!("settled:{idx}:{}", g.key))
+            .min_w(0.0)
+            .w_full()
+            .radius(6.0)
+            .clip_rounded(6.0)
+            .fill(Color {
+                r: 0.0,
+                g: 0.0,
+                b: 0.0,
+                a: 0.16,
+            })
+            .child(el().w(3.0).fill(sev_color(g.sev)))
+            .child(body);
+        c = c.child(tile);
     }
     c
 }
@@ -1531,7 +1551,7 @@ fn group_trigger(g: &GroupItem, k: &Kit) -> El {
         .h(EST_GROUP_H)
         .center_y()
         .gap(8.0)
-        .pl(24.0) // nested rows sit inside their session header
+        .pl(10.0) // nested rows sit inside their group sub-tile
         .pr(8.0)
         .radius(k.radius.sm)
         .child(icon(glyph, 10.0).color(k.c.icon_weaker))
@@ -1583,7 +1603,7 @@ fn compact_row(a: &AgentItem, key: String, mode: TitleMode, k: &Kit) -> El {
         .h(EST_COMPACT_H)
         .center_y()
         .gap(12.0)
-        .pl(36.0) // group indent + dot column
+        .pl(26.0) // stripe + group indent + dot column
         .pr(8.0)
         .radius(k.radius.sm)
         .child(el().size(8.0, 8.0).radius(4.0).fill(sev_color(a.sev)))
