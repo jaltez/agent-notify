@@ -1,6 +1,6 @@
 [package]
 name = "agent-notify"
-version = "0.6.0"
+version = "0.6.1"
 edition = "2024"
 description = "Agent state notifications: Rust port scaffolding (go agent-notify -> rune)"
 license = "MIT"

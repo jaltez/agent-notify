@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.6.1 (2026-11-13)
+
+- **Agent-tile icon**: the tray/toast/app icon is a designed mark now —
+  a dark rounded tile with a gray border (legible on light and dark
+  taskbars) and the terminal prompt `>_` stroked in the severity color.
+  The blink dims the prompt to idle gray instead of changing shape.
+- **Working is yellow** (`#FFD60A`), everywhere the state code applies:
+  tray icon, toast logo, row dots, header dot, chips, state bar. The
+  kit's blue UI accent stays — that is styling, not state.
+- **Agent clicks keep the panel open**: the fleet overview stays up
+  while the client jumps to the clicked agent; only the close button
+  hides the window.
+
 ## 0.6.0 (2026-11-12)
 
 **The Rust port.** agent-notify is now a single Rust binary on
