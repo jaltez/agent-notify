@@ -388,16 +388,28 @@ impl Backend for Windows {
     }
 
     fn rescan(&self) -> Duration {
-        Duration::ZERO // session list is static config
+        // `herdr session list` spawns a process: every 5 s keeps new
+        // sessions near-immediate without hammering the CLI
+        Duration::from_secs(5)
     }
 
-    fn discover(&self, _timeout: Duration) -> anyhow::Result<Vec<Session>> {
+    fn discover(&self, timeout: Duration) -> anyhow::Result<Vec<Session>> {
+        // Dynamic discovery: `herdr session list` is the live session
+        // table, so sessions created after agent-notify started are picked
+        // up on the next rescan (the old list was static config and never
+        // grew). Config's extra sessions and the default stay in the
+        // union: a session listed there keeps being polled even when the
+        // CLI cannot list (down = visible, as before).
         let mut names = vec!["default".to_string()];
-        for s in &self.sessions {
-            if s.is_empty() || s == "default" {
-                continue;
+        let mut argv = vec![self.binary.display().to_string()];
+        argv.extend(["session".into(), "list".into()]);
+        let dir = self.dir.as_ref().map(|d| d.display().to_string()).unwrap_or_default();
+        let out = proc::run(&argv, &[], &dir, timeout)?;
+        let out = proc::decode_utf16(&out);
+        for n in parse_session_list(&String::from_utf8_lossy(&out)) {
+            if !names.contains(&n) {
+                names.push(n);
             }
-            names.push(s.clone());
         }
         Ok(names
             .into_iter()
@@ -417,6 +429,28 @@ impl Backend for Windows {
         let out = proc::run(&argv, &[], &dir, timeout)?;
         parse_snapshot(&out)
     }
+}
+
+/// Parses `herdr session list`'s table into the names of **running**
+/// sessions: rows are `name status directory socket`, whitespace-separated,
+/// no header. Anything not "running" (e.g. "stopped") is not pollable and
+/// stays out; malformed rows are skipped.
+fn parse_session_list(out: &str) -> Vec<String> {
+    let mut names = Vec::new();
+    for line in out.lines() {
+        let line = line.trim();
+        if line.is_empty() {
+            continue;
+        }
+        let mut tok = line.split_whitespace();
+        let (Some(name), Some(status)) = (tok.next(), tok.next()) else {
+            continue;
+        };
+        if status == "running" && !name.is_empty() && !names.contains(&name.to_string()) {
+            names.push(name.to_string());
+        }
+    }
+    names
 }
 
 // ---------------------------------------------------------------------------
@@ -649,6 +683,18 @@ mod tests {
         assert_eq!(snap.agents[0].tab, "#");
         assert_eq!(snap.agents[1].tab, "#test");
         assert_eq!(snap.agents[2].tab, "", "unknown tab id stays empty");
+    }
+
+    #[test]
+    fn test_parse_session_list() {
+        // live table shape: name, status, directory, socket; no header
+        let out = "default              running  /root/.config/herdr   /root/.config/herdr/herdr.sock\n\
+                   pods                 running  /root/.config/herdr/sessions/pods  /sock\n\
+                   vrlife               stopped  /root/.config/herdr/sessions/vrlife /sock\n\
+                   \n\
+                   junkrow\n\
+                   pods                 running  /dup";
+        assert_eq!(parse_session_list(out), vec!["default", "pods"]);
     }
 
     #[test]

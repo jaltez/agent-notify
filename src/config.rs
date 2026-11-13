@@ -392,7 +392,7 @@ impl Config {
                     extra_path: Vec::new(),
                     poll: Duration(StdDuration::from_secs(2)),
                     timeout: Duration(StdDuration::from_secs(10)),
-                    rescan: Duration(StdDuration::from_secs(30)),
+                    rescan: Duration(StdDuration::from_secs(10)),
                 },
             },
             sink: vec![Sink {
