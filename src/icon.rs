@@ -245,12 +245,12 @@ fn agent_tile(prompt: Rgb, badge: Option<Rgb>, size: usize, x: usize, y: usize) 
         over(TILE, prompt, a_glyph, 1.0)
     };
 
-    // the severity badge, hugging the tile's bottom-left corner like an
+    // the severity badge, hugging the tile's bottom-right corner like an
     // app notification badge
     if let Some(b) = badge {
-        let bx = -hw * 0.62;
+        let bx = hw * 0.62;
         let by = hw * 0.62;
-        let r = (s * 0.12).clamp(1.8, 30.0);
+        let r = (s * 0.14).clamp(2.2, 36.0);
         let d = (px - bx).hypot(py - by);
         let a_b = (r - d + 0.5).clamp(0.0, 1.0);
         if a_b > 0.0 {
