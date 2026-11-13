@@ -1,9 +1,10 @@
 //! Renders the agent-tile icon used for the tray icon and toast logo.
 //! Port of `internal/icon/icon.go`, redesigned for v0.6: a dark rounded
-//! tile with a gray border and the terminal prompt `>_` stroked in the
-//! severity color — generated as pixels (32bpp DIB ICO for LoadImage on
-//! Windows, PNG elsewhere) with no image assets, plus raw straight-RGBA
-//! rasters for [`rune::TrayIcon`], which wants pixels, not files.
+//! tile with a gray border, the terminal prompt `>_` always in white, and
+//! the severity as a badge circle on the tile's bottom-left corner —
+//! generated as pixels (32bpp DIB ICO for LoadImage on Windows, PNG
+//! elsewhere) with no image assets, plus raw straight-RGBA rasters for
+//! [`rune::TrayIcon`], which wants pixels, not files.
 
 // RGB is an 8-bit color channel triple (`icon.RGB`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,6 +41,8 @@ const SEVERITY_COLORS: [(&str, Rgb); 5] = [
 const TILE: Rgb = Rgb::new(0x1C, 0x1E, 0x22);
 const BORDER: Rgb = Rgb::new(0x9C, 0xA3, 0xAF);
 const IDLE: Rgb = Rgb::new(0x6B, 0x72, 0x80);
+/// The prompt's fixed color — the state lives in the badge.
+const WHITE: Rgb = Rgb::new(0xFF, 0xFF, 0xFF);
 
 /// The color for a severity, defaulting to idle gray (`icon.Color`).
 pub fn color(severity: &str) -> Rgb {
@@ -195,12 +198,14 @@ fn over(base: Rgb, top: Rgb, a: f64, alpha_out: f64) -> (u8, u8, u8, u8) {
     )
 }
 
-/// One pixel of the agent tile (the v0.6 icon, not a bare circle): a dark
-/// rounded tile with a gray border — legible on light and dark trays —
-/// and the terminal prompt `>_` stroked in `prompt` (the severity; the
-/// blink's dim phase passes idle gray). The `>_` is the terminal-agent
-/// mark; herdr's own tab labels use the same glyph.
-fn agent_tile(prompt: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
+/// One pixel of the agent tile: a dark rounded tile with a gray border,
+/// the terminal prompt `>_` always in white, and — when the fleet needs
+/// eyes on it — a severity badge circle on the tile's bottom-left corner
+/// (working yellow, blocked red, waiting green, down amber). `badge =
+/// None` (or idle gray) leaves the badge out: nothing running, nothing to
+/// see. The blink's "off" phase is the no-badge variant, so the pulse is
+/// the badge appearing and disappearing.
+fn agent_tile(prompt: Rgb, badge: Option<Rgb>, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
     let half = size as f64 / 2.0;
     let s = size as f64;
     let px = x as f64 + 0.5 - half;
@@ -234,20 +239,38 @@ fn agent_tile(prompt: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) 
         .min(seg(-0.02, 0.38, 0.42, 0.38)); // `_`
     let a_glyph = (0.5 - (d_glyph - pw / 2.0)).clamp(0.0, 1.0);
 
-    if a_border > 0.0 {
-        return over(TILE, BORDER, a_border, 1.0);
+    let mut out = if a_border > 0.0 {
+        over(TILE, BORDER, a_border, 1.0)
+    } else {
+        over(TILE, prompt, a_glyph, 1.0)
+    };
+
+    // the severity badge, hugging the tile's bottom-left corner like an
+    // app notification badge
+    if let Some(b) = badge {
+        let bx = -hw * 0.62;
+        let by = hw * 0.62;
+        let r = (s * 0.12).clamp(1.8, 30.0);
+        let d = (px - bx).hypot(py - by);
+        let a_b = (r - d + 0.5).clamp(0.0, 1.0);
+        if a_b > 0.0 {
+            let base = Rgb::new(out.0, out.1, out.2);
+            let alpha_out = (f64::from(out.3) / 255.0).max(a_b);
+            out = over(base, b, a_b, alpha_out);
+        }
     }
-    over(TILE, prompt, a_glyph, 1.0)
+    out
 }
 
-/// The bright tile: prompt in the severity color.
+/// The bright tile: white prompt + severity badge.
 fn agent_tile_bright(c: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
-    agent_tile(c, size, x, y)
+    agent_tile(WHITE, Some(c), size, x, y)
 }
 
-/// The dim tile (blink "off" phase): prompt in idle gray, same shape.
+/// The dim tile (blink "off" phase, or everything resting): white prompt,
+/// no badge.
 fn agent_tile_dim(_c: Rgb, size: usize, x: usize, y: usize) -> (u8, u8, u8, u8) {
-    agent_tile(IDLE, size, x, y)
+    agent_tile(WHITE, None, size, x, y)
 }
 #[cfg(test)]
 mod tests {
@@ -265,37 +288,48 @@ mod tests {
     }
 
     #[test]
-    fn prompt_paints_in_the_severity_color() {
+    fn prompt_paints_white_with_severity_badge() {
         let sev = color("working"); // #FFD60A
         let size = 32;
-        let mut painted = 0;
+        let (mut white, mut badge) = (0, 0);
         for y in 0..size {
             for x in 0..size {
                 let (r, g, b, a) = agent_tile_bright(sev, size, x, y);
-                if a == 255 && (r, g, b) == (sev.r, sev.g, sev.b) {
-                    painted += 1;
+                if a == 255 {
+                    if (r, g, b) == (255, 255, 255) {
+                        white += 1;
+                    }
+                    if (r, g, b) == (sev.r, sev.g, sev.b) {
+                        badge += 1;
+                    }
                 }
             }
         }
-        assert!(
-            painted > 20,
-            "the >_ prompt must paint in the severity color ({painted} px)"
-        );
+        assert!(white > 20, "the >_ prompt is white ({white} px)");
+        assert!(badge > 4, "the severity badge paints ({badge} px)");
     }
 
     #[test]
-    fn dim_phase_prompt_is_idle_gray() {
+    fn dim_phase_has_no_badge() {
+        let sev = color("working");
         let size = 32;
-        let mut gray = 0;
+        let mut white = 0;
+        let mut badge = 0;
         for y in 0..size {
             for x in 0..size {
-                let (r, g, b, a) = agent_tile_dim(color("working"), size, x, y);
-                if a == 255 && (r, g, b) == (IDLE.r, IDLE.g, IDLE.b) {
-                    gray += 1;
+                let (r, g, b, a) = agent_tile_dim(sev, size, x, y);
+                if a == 255 {
+                    if (r, g, b) == (255, 255, 255) {
+                        white += 1;
+                    }
+                    if (r, g, b) == (sev.r, sev.g, sev.b) {
+                        badge += 1;
+                    }
                 }
             }
         }
-        assert!(gray > 20, "dim prompt paints idle gray ({gray} px)");
+        assert!(white > 20, "the dim tile keeps its white prompt ({white} px)");
+        assert_eq!(badge, 0, "the dim tile has no severity badge");
     }
 
     /// Eyeball helper: writes the tile at several sizes to /tmp

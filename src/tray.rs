@@ -432,6 +432,9 @@ impl Tray {
         // Drop the old tray outside the inner lock: dropping joins its
         // worker thread, which may be inside this very handler dispatch.
         drop(old);
+        // idle: no badge at all — a resting fleet has nothing to flag
+        // (working/blocked/waiting/down paint their badge)
+        let hollow = hollow || sev == "idle";
         let pixels = if hollow {
             icon::rgba_hollow(sev, ICON_SIZE)
         } else {
