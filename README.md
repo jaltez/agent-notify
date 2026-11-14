@@ -1,6 +1,6 @@
 # agent-notify
 
-**Tray status and notifications for AI coding agents.** One Go binary
+**Tray status and notifications for AI coding agents.** One Rust binary
 watches your [herdr](https://herdr.dev) sessions (local, Windows-side, and
 inside WSL), shows what every agent is doing, and pops up when one needs
 attention.
@@ -9,7 +9,7 @@ attention.
 herdr sessions (local · windows · wsl)
         │  poll + diff
         ▼
-   agent-notify ──▶ tray icon (color = fleet state) ──▶ flyout panel on click
+   agent-notify ──▶ tray icon (color = fleet state) ──▶ panel on click
                  └─▶ popups · bell · command · webhook
 ```
 
@@ -33,19 +33,21 @@ idle, or gets blocked. Otherwise it stays out of the way.
   clears as soon as the agent starts working again. Blocked blinks until
   resolved. Entering 🟢 blinks for 2 minutes, then settles into a steady
   green.
-- **Left click → flyout panel**: fleet summary with a per-state bar;
-  every session always listed with live counts. Working and blocked
-  agents show as full rows (status dot, runner · project, current
-  title, colored wash); finished (green) and resting agents each
-  collapse into one `▸ N finished` / `▸ N resting` line per session;
-  click a session header or a group line to toggle. Clicking an agent row
-  focuses it in an already-open client (`herdr agent focus`; the
-  client window is raised if findable). Opened groups list
-  their agents as compact single lines. Refreshed every second; mouse
-  wheel scrolls when needed; auto-close (8 s) only applies while
-  everything fits; outside click / Escape always dismiss.
+- **Left click → panel**: a regular window now — fleet overview with a
+  per-state bar, sessions in a grid that spreads as the fleet grows,
+  each session also on a full-width tab. Working and blocked agents
+  show as full rows (status dot, runner · project, current title,
+  colored wash); finished (green) and resting agents each collapse
+  into one `▸ N finished` / `▸ N resting` line per session; click a
+  session header or a group line to toggle, and `collapse`/`expand`
+  fold the whole fleet at once. Clicking an agent row focuses it in an
+  already-open client (`herdr agent focus`; the client window is
+  raised if findable) and the panel stays open. Titles can show
+  herdr's tab labels instead of task titles (`Aa task / Aa tab`,
+  persisted). Refreshed every second; mouse wheel scrolls when a grid
+  outgrows the window.
 - **Right click → menu**: same information as a native menu (the only UI
-  on Linux/macOS).
+  on Linux — rune has no macOS tray backend yet).
 - **Popups**: Windows toasts (or notify-send) when an agent needs
   attention: `claude finished` / *what it was doing* /
   `project · space — fleet counts`.
@@ -74,8 +76,10 @@ registers autostart in a few prompts.
 curl -fsSL https://raw.githubusercontent.com/jaltez/agent-notify/main/scripts/install.sh | sh
 ```
 
-Or `go install github.com/jaltez/agent-notify@latest`. A manually
-downloaded binary offers the same `agent-notify setup` wizard.
+Or build from source: `cargo install --git
+https://github.com/jaltez/agent-notify` (needs Rust 1.85+; on Linux
+also `libxkbcommon-dev` and `libwayland-dev`). A manually downloaded
+binary offers the same `agent-notify setup` wizard.
 
 Then run it. A tray icon appears; sessions are auto-discovered.
 Left-click the icon for the panel. No config required: `agent-notify
@@ -180,13 +184,18 @@ body_template = '{"content": "{{.Session}}: {{.Agent}} {{.Verb}} - {{.Title}}"}'
 Notifiers: `tray`, `popup`, `bell`, `command` (templated argv), `webhook`
 (JSON or templated body), `log`. Multiple instances allowed.
 
-Templates (popup title/body, command argv, webhook bodies) are Go
-`text/template`s over the event: `.Kind .Verb .Time .Source .Host .Session
-.Agent .From .To .Title .Project .PaneID .Focused`.
+Templates (popup title/body, command argv, webhook bodies) use Go
+`text/template` syntax over the event: `.Kind .Verb .Time .Source .Host
+.Session .Agent .From .To .Title .Project .PaneID .Focused`, plus
+`{{if .Field}}…{{else if .Field}}…{{else}}…{{end}}`. No pipelines or
+functions (they are parse errors); a missing field at render time falls
+back to the raw spec.
 
 ## Build
 
-Requires [Go](https://go.dev) 1.25+ (any OS; macOS tray needs cgo):
+Requires Rust 1.85+ (edition 2024). Linux builds need `libxkbcommon-dev`
+and `libwayland-dev`; cross-building the Windows exe from Linux needs
+`mingw-w64`:
 
 ```bash
 git clone https://github.com/jaltez/agent-notify && cd agent-notify
@@ -195,7 +204,9 @@ make test
 ```
 
 The Windows binary is `windowsgui`: no console window. CLI subcommands
-(`probe`, `test`, `monitor`) still print from terminals.
+(`probe`, `test`, `monitor`) still print from terminals. macOS has no
+tray backend yet, so the tray targets Windows and Linux/WSL; the
+headless `run`/`monitor` commands stay available anywhere it compiles.
 
 > On Windows a **running tray instance locks its exe**. Close the old
 > tray (or `taskkill /IM agent-notify.exe /F`) before rebuilding, or the

@@ -32,7 +32,7 @@ fail() { echo "install: $*" >&2; exit 1; }
 OS="$(uname -s)"
 ARCH="$(uname -m)"
 [ "$OS" = "Linux" ] || fail "this installer supports Linux/WSL; on Windows download the release zip from https://github.com/$REPO/releases"
-[ "$ARCH" = "x86_64" ] || fail "no release assets for $ARCH; build from source: go install github.com/$REPO@latest"
+[ "$ARCH" = "x86_64" ] || fail "no release assets for $ARCH; build from source: cargo install --git https://github.com/$REPO"
 
 command -v curl >/dev/null 2>&1 || command -v wget >/dev/null 2>&1 || fail "need curl or wget"
 command -v tar >/dev/null 2>&1 || fail "need tar"
@@ -57,7 +57,7 @@ VERSION="$(sed -n 's/.*"tag_name": *"\([^"]*\)".*/\1/p' "$TMP/rel.json" | head -
 BASE="https://github.com/$REPO/releases/download/$VERSION"
 
 # match the linux amd64 tarball whatever the naming convention
-# (goreleaser uses underscores, early releases used dashes)
+# (releases use underscores, early releases used dashes)
 URLS="$(grep -o '"browser_download_url": *"[^"]*"' "$TMP/rel.json" | sed 's/.*"\([^"]*\)"$/\1/')"
 ASSET_URL="$(echo "$URLS" | grep 'linux.*amd64.*tar.gz$' | head -1)"
 [ -n "$ASSET_URL" ] || fail "no linux amd64 tarball in release $VERSION"

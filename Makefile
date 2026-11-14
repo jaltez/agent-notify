@@ -2,10 +2,13 @@
 
 BINARY := agent-notify
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-PKG := github.com/jaltez/agent-notify/internal/buildinfo
-LDFLAGS = -s -w -X $(PKG).Version=$(VERSION)
+WIN_TARGET := x86_64-pc-windows-gnu
 
-.PHONY: build linux windows windows-console test fmt vet clean install release dev-install
+# Releases are not built here: push a v* tag and
+# .github/workflows/release.yml builds + publishes (same archive names
+# the installers and in-app self-update consume).
+
+.PHONY: build linux windows windows-console test fmt vet clean install dev-install
 
 build: linux windows windows-console
 
@@ -14,40 +17,40 @@ build: linux windows windows-console
 dev-install: windows
 	powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/dev-update.ps1
 
-# Local snapshot release (production releases come from the tag workflow
-# running goreleaser; see .goreleaser.yml).
-release:
-	goreleaser release --snapshot --clean
-
 linux:
 	mkdir -p bin
-	go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY) .
+	AGENT_NOTIFY_VERSION=$(VERSION) cargo build --release
+	cp target/release/$(BINARY) bin/
 
 # windowsgui subsystem: no console window at all (double-click friendly).
 # CLI subcommands still print when launched from a terminal via console
 # attach, and over WSL interop via inherited pipes.
 windows:
 	mkdir -p bin
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-		go build -trimpath -ldflags "$(LDFLAGS) -H windowsgui" -o bin/$(BINARY).exe .
+	AGENT_NOTIFY_VERSION=$(VERSION) \
+		cargo build --release --target $(WIN_TARGET) --features windowsgui
+	cp target/$(WIN_TARGET)/release/$(BINARY).exe bin/$(BINARY).exe
 
 # Console-subsystem build for debugging (shows a window when launched
 # outside a terminal).
 windows-console:
 	mkdir -p bin
-	GOOS=windows GOARCH=amd64 CGO_ENABLED=0 \
-		go build -trimpath -ldflags "$(LDFLAGS)" -o bin/$(BINARY)-console.exe .
+	AGENT_NOTIFY_VERSION=$(VERSION) \
+		cargo build --release --target $(WIN_TARGET)
+	cp target/$(WIN_TARGET)/release/$(BINARY).exe bin/$(BINARY)-console.exe
 
 test:
-	go test ./...
+	cargo test
 
 fmt:
-	gofmt -w .
+	cargo fmt
 
+# Advisory lint pass (clippy is not warning-free yet; not gated in CI).
 vet:
-	go vet ./...
+	cargo clippy
 
 clean:
+	cargo clean
 	rm -rf bin dist
 
 # Installs the Linux binary. The systemd user service is deployed by

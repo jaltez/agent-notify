@@ -1,11 +1,9 @@
-# Rust port notes (branch `rust-port`)
+# Rust port notes
 
-Status: **WIP, being iterated with the user.** Everything below documents what
-exists on the branch today, not what is planned.
-
-- Branch: `rust-port` (base: scaffold commit `ea414ca rust-port: scaffold that
-  compiles (rune pinned rev 003a5c7)`). The module ports live in the working
-  tree on top of it, not yet committed.
+Status: **shipped.** The port became 0.6.0 (2026-11-12, see CHANGELOG);
+the Go tree (`internal/`, `main.go`) is kept only as a porting
+reference. The notes below record how each module was ported and where
+the Rust side deviates.
 - Toolkit: [`rune`](https://github.com/anomalyco/rune) pinned to rev
   `003a5c70c5f9805eae86ebb35adf965aa262c5aa` (`Cargo.toml:28-30`, crates
   `rune`, `rune-kit`, `rune-notify` all at the same rev). The vendored source
