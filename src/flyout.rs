@@ -1924,8 +1924,11 @@ mod tests {
         assert_eq!(flat_ws("日本語 タスク"), "日本語 タスク");
     }
 
-    /// The smoke render's data: three sessions with every state, long
-    /// titles, a focused agent and an offline session — pixels over words.
+    /// The smoke render's data: six sessions across wsl/windows/local
+    /// hosts with every state, a long title, a focused agent and an
+    /// offline session — pixels over words. Sized for the README shot:
+    /// six sections settle the overview grid into three ~330 pt columns
+    /// (eight sections squeezed into four 240 pt ones and truncated).
     fn smoke_view() -> View {
         View {
             sessions: vec![
@@ -1937,17 +1940,15 @@ mod tests {
                         engine::AgentView {
                             name: "pi".into(),
                             status: "working".into(),
-                            title: "ART: Fix snapshot corruption and policy drift in the watcher"
-                                .into(),
+                            title: "Fix snapshot corruption in the watcher".into(),
                             project: "policy".into(),
                             pane_id: "w1:p1".into(),
-                            focused: true,
                             ..engine::AgentView::default()
                         },
                         engine::AgentView {
                             name: "igno".into(),
                             status: "blocked".into(),
-                            title: "Waiting on user: confirm the .amp gitignore addition".into(),
+                            title: "Waiting on user: .gitignore entry".into(),
                             project: "repo".into(),
                             pane_id: "w1:p2".into(),
                             ..engine::AgentView::default()
@@ -1955,7 +1956,7 @@ mod tests {
                         engine::AgentView {
                             name: "dpb".into(),
                             status: "working".into(),
-                            title: "Revive webpuy and comunit".into(),
+                            title: "Revive deploy script and lint config".into(),
                             project: "web".into(),
                             pane_id: "w1:p3".into(),
                             ..engine::AgentView::default()
@@ -1986,14 +1987,8 @@ mod tests {
                             pane_id: "w2:p1".into(),
                             ..engine::AgentView::default()
                         },
-                        agent("svc", "blocked", "Blocked on credentials"),
+                        agent("svc", "blocked", "Needs login: registry token expired"),
                     ],
-                },
-                engine::SessionView {
-                    host: "wsl".into(),
-                    name: "remote".into(),
-                    up: false,
-                    agents: vec![agent("gone", "idle", "was here once")],
                 },
                 engine::SessionView {
                     host: "wsl".into(),
@@ -2003,16 +1998,16 @@ mod tests {
                         engine::AgentView {
                             name: "cg".into(),
                             status: "working".into(),
-                            title: "AUDIT: Auditar portafolio de proyectos".into(),
-                            project: "audit".into(),
+                            title: "Audit staging fleet for stale pods".into(),
+                            project: "ops".into(),
                             pane_id: "w5:p1".into(),
                             ..engine::AgentView::default()
                         },
                         engine::AgentView {
                             name: "viv".into(),
                             status: "blocked".into(),
-                            title: "VIVI: Explorar repo vivienda".into(),
-                            project: "vivi".into(),
+                            title: "Waiting on user: pick a staging host".into(),
+                            project: "web".into(),
                             pane_id: "w6:p1".into(),
                             ..engine::AgentView::default()
                         },
@@ -2022,19 +2017,19 @@ mod tests {
                     host: "windows".into(),
                     name: "lab".into(),
                     up: true,
-                    agents: vec![agent("px", "working", "PROV: Check provider compat")],
+                    agents: vec![agent("px", "working", "Check the provider compatibility matrix")],
                 },
                 engine::SessionView {
-                    host: "wsl".into(),
+                    host: "local".into(),
                     name: "quiet".into(),
                     up: true,
                     agents: vec![agent("rest", "idle", "Resting between runs")],
                 },
                 engine::SessionView {
-                    host: "windows".into(),
-                    name: "bench".into(),
-                    up: true,
-                    agents: vec![agent("mk", "idle", "Idle"), agent("jo", "idle", "Idle")],
+                    host: "local".into(),
+                    name: "remote".into(),
+                    up: false,
+                    agents: vec![agent("gone", "idle", "was here once")],
                 },
             ],
         }
@@ -2152,17 +2147,21 @@ mod tests {
     /// Pixels, not just the model: renders the redesigned panel to a PNG.
     /// Ignored by default (needs a wgpu adapter — vulkan/lavapipe under
     /// WSLg); run it with `cargo test -- --ignored smoke`. One PNG per
-    /// room: the overview grid and a session's full-width tab.
+    /// room: the overview grid and a session's full-width tab. The
+    /// overview uses a 1600×1000 work area so the grid settles into
+    /// three readable columns (a 1920-wide area admits four 240 pt
+    /// ones and every title truncates); that frame is the README shot
+    /// (`cp /tmp/agent-notify-flyout-smoke.png docs/flyout.png`).
     #[test]
     #[ignore = "needs a wgpu adapter; run explicitly: cargo test -- --ignored smoke"]
     fn smoke_renders_the_panel_to_png() {
         let area = WorkArea {
             x_px: 0,
             y_px: 0,
-            right_px: 1920,
-            bottom_px: 900,
-            w_pts: 1920.0,
-            h_pts: 900.0,
+            right_px: 1600,
+            bottom_px: 1000,
+            w_pts: 1600.0,
+            h_pts: 1000.0,
             scale: 1.0,
         };
         let model = build_model(&smoke_view(), &HashMap::new(), &HashMap::new());
